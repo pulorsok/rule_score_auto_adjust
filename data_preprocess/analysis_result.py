@@ -107,7 +107,7 @@ def _append_result(sha256: str, results: dict[str, int]) -> Path:
 
 
 @functools.lru_cache(maxsize=6)
-def _get_quark(apk_path: Path) -> Quark:
+def _get_quark(apk_path: Path) -> "Quark":
     return Quark(str(apk_path))
 
 

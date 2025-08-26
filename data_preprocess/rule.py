@@ -28,7 +28,7 @@ def load_list(rule_list: str) -> pl.DataFrame:
 
 def get(rule_name: str) -> Path:
     rule_path = get_folder() / f"{rule_name}"
-    return rule_path.resolve()
+    return rule_path
 
 
 def build_rule_folder(rule_names: list[str], folder: Path) -> Path:
@@ -104,3 +104,10 @@ def with_ai_adjusted_scores(rules: pl.DataFrame, run_id: str):
     )
     
     
+class Rules:
+    def __init__(self, rule_folder: Path):
+        self.rule_folder = rule_folder
+        
+    def get(self, rule_name: str) -> Path:
+        rule_path = self.rule_folder / f"{rule_name}"
+        return rule_path

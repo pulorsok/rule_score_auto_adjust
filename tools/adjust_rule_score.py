@@ -1,49 +1,66 @@
-# %%
+"""
+This script is a command-line tool for adjusting rule scores for malware detection.
+
+It can be used to start a fresh training run or continue a previous one.
+The learning rates and epochs for training are configurable.
+
+Example usage:
+
+To start a fresh run:
+python tools/adjust_rule_score.py --target-family <family_name> --lrs 0.1,0.05 --epochs 50
+
+To continue a previous run:
+python tools/adjust_rule_score.py --run-id <mlflow_run_id> --lrs 0.01 --epochs 50
+"""
+
 import datetime
+import sys
+from dataclasses import dataclass
+from itertools import count
 from pathlib import Path
+import tempfile
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+)
+
+import click
 import dotenv
+import mlflow
 import mlflow.pytorch
+import polars as pl
+import torch
+import tqdm
+from mlflow.entities import Run
+from mlflow.pytorch import log_model
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from torch.optim import Optimizer
+from torch.utils.data.dataloader import DataLoader
+from torch.utils.tensorboard.writer import SummaryWriter
+import data_preprocess.apk as apk_lib
+import data_preprocess.rule as rule_lib
+
+import data_preprocess.analysis_result as analysis_result_lib
+from data_preprocess import dataset as dataset_lib
+from model import RuleAdjustmentModel
 
 dotenv.load_dotenv()
-
-PATH_TO_APK_LIST = [
-    "data/lists/family/droidkungfu.csv",
-    "data/lists/family/basebridge.csv",
-    "data/lists/family/golddream.csv",
-    "data/lists/benignAPKs_top_0.4_vt_scan_date.csv",
-]
-
-PATH_TO_RULE_LIST = [
-    "/mnt/storage/data/rule_to_release/golddream/rule_added.csv",
-    "/mnt/storage/data/rule_to_release/default_rules.csv"
-]
-
-# %%
-import data_preprocess.rule as rule_lib
-import polars as pl
-
-rules = pl.concat(list(map(rule_lib.load_list, PATH_TO_RULE_LIST)))[
-    "rule"
-].to_list()
-rule_paths = [rule_lib.get(r) for r in rules]
-
-# %%
-from dataclasses import dataclass
-import data_preprocess.apk as apk_lib
-import data_preprocess.analysis_result as analysis_result_lib
-import tqdm
-from pathlib import Path
-import polars as pl
 
 
 @dataclass()
 class ApkInfo:
     sha256: str
     is_malicious: int
-    path: Path | None
-    analysis_result: dict[str, int] | None
+    path: Optional[Path]
+    analysis_result: Optional[Dict[str, int]]
 
-    def __init__(self, sha256: str, is_malicious: int):
+    def __init__(self, sha256: str, is_malicious: int, rule_paths: List[Path]):
         self.sha256 = sha256
         self.is_malicious = is_malicious
         self.path = apk_lib.download(sha256, dry_run=True)
@@ -54,21 +71,6 @@ class ApkInfo:
             )
         else:
             self.analysis_result = {}
-
-
-sha256_table = pl.concat(list(map(apk_lib.read_csv, PATH_TO_APK_LIST)))
-original_apk_info_list = [
-    ApkInfo(sha256, is_malicious)
-    for sha256, is_malicious in tqdm.tqdm(
-        sha256_table.rows(),
-        total=len(sha256_table),
-        desc="Preparing APK analysis results",
-    )
-]
-
-# %%
-# Prepare to clean the data
-from typing import Generator, Iterable, Callable
 
 
 def show_and_filter(
@@ -83,386 +85,335 @@ def show_and_filter(
             yield apk_info
 
     print(
-        f'Drop {len(to_drop)} APKs, set checkpoint in this function and see "to_drop" for details'
+        f'Drop {len(to_drop)} APKs'
     )
-    
-    print(to_drop)
+    if to_drop:
+        print("Dropped APKs (sha256):")
+        for apk_info in to_drop:
+            print(f"  - {apk_info.sha256}")
 
 
-apk_info_list = original_apk_info_list
-# %%
-print("Filter out apk not exits.")
-apk_not_exist = lambda info: info.path is None or not info.path.exists()
-apk_info_list = show_and_filter(apk_info_list, apk_not_exist)
-apk_info_list = list(apk_info_list)
-
-# %%
-print("Filter out apk have no analysis result.")
-apk_no_analysis_result = lambda info: any(
-    v < 0 for v in info.analysis_result.values()
-)
-apk_info_list = show_and_filter(apk_info_list, apk_no_analysis_result)
-apk_info_list = list(apk_info_list)
-
-# %%
-print("Filter out apk didn't pass 5 stage on any rule.")
-apk_no_passing_5_stage = lambda info: not any(
-    v >= 5 for v in info.analysis_result.values()
-)
-apk_info_list = show_and_filter(apk_info_list, apk_no_passing_5_stage)
-apk_info_list = list(apk_info_list)
-
-# %%
-print("Filter out apks that Quark failed to analyze due to memory issue.")
-
-memory_issue_apks = {
-    "00015824995BC2F452BBDE2833F79423A8DC6DA8364A641DFB6D068D44C557DF"
-}
-
-apk_info_list = show_and_filter(
-    apk_info_list, lambda info: info.sha256 in memory_issue_apks
-)
-apk_info_list = list(apk_info_list)
-
-# %%
-print("Balance the dataset by removing extra benign APKs.")
-
-from itertools import count
-
-benign_counter = count()
-num_of_malware = sum(1 for info in apk_info_list if info.is_malicious == 1)
-
-malicious_or_enough_benign = (
-    lambda info: info.is_malicious != 1
-    and next(benign_counter) >= num_of_malware
-)
-apk_info_list = show_and_filter(apk_info_list, malicious_or_enough_benign)
-apk_info_list = list(apk_info_list)
-
-# %%
-# 確認所有惡意樣本都還存在
-
-malware_sha256 = {
-    apk.sha256 for apk in original_apk_info_list if apk.is_malicious == 1
-}
-all_sha256s = {apk.sha256 for apk in apk_info_list}
-
-missing_malware = [m for m in malware_sha256 if m not in all_sha256s]
-
-assert (
-    len(missing_malware) == 0
-), f'Some malware is missing, check "missing_malware"'
-
-# %%
-# 確認所有內建樣本都還存在（apk-sample.csv）
-
-builtin_sample = apk_lib.read_csv(
-    "/mnt/storage/rule_score_auto_adjust/data/lists/family/apk-sample.csv"
-)["sha256"].to_list()
-
-missing_apks = [
-    sha256 for sha256 in builtin_sample if sha256 not in all_sha256s
-]
-assert len(missing_malware) == 0, f'Some apk is missing, check "missing_apks"'
-
-# %%
-# Build Dataset
-from data_preprocess import dataset as dataset_lib
-
-dataset = dataset_lib.ApkDataset(
-    sha256s=[apk.sha256 for apk in apk_info_list],
-    is_malicious=[apk.is_malicious for apk in apk_info_list],
-    rules=rules,
-)
-
-print(f"Num of APK: {len(dataset)}")
-print(f"APK distribution: {dataset.apk_info['is_malicious'].value_counts()}")
-print(f"Num of rules: {len(dataset.rules)}")
-
-# %%
-# Preload Dataset into cache
-dataset.preload()
-
-# %%
-# Create dataloader
-from torch.utils.data.dataloader import DataLoader
-
-# dataloader = DataLoader(dataset, batch_size=len(dataset), shuffle=True)
-dataloader = DataLoader(dataset, batch_size=len(dataset), shuffle=True)
-
-# %%
-# Build Model
-from model import (
-    RuleAdjustmentModel_NoTotalScore_Percentage,
-    RuleAdjustmentModel,
-)
-
-model = RuleAdjustmentModel(len(dataset.rules))
-# model = RuleAdjustmentModel_NoTotalScore_Percentage(len(dataset.rules))
-print(model)
-
-# %%
-# Check is CUDA available
-import torch
-
-assert torch.cuda.is_available()
-device = torch.device("cuda")
-model = model.to(device)
-
-
-# %%
-# Loss Function
-import torch
-
-# 測試 Loss
-loss_fn = torch.nn.BCELoss().to(device)
-
-# 測試數據
-y_pred = torch.tensor([0.0, 1.0, 1.0, 1.0, 0.0])  # 模擬不同的預測值
-y_exp = torch.tensor([0.0, 1.0, 1.0, 0.0, 0.0])
-loss_value = loss_fn(y_pred, y_exp)
-
-print("Loss:", loss_value.item())
-best_model_param_path = None
-
-# %%
-# Record environment
-# TODO - Record dataset to mlflow
-import mlflow
-from mlflow.pytorch import log_model
-import sys
-import click
-from pathlib import Path
-
-mlflow.set_tracking_uri(uri="http://localhost:5000")
-
-families = {Path(p).stem for p in PATH_TO_APK_LIST}
-
-target_family = click.prompt(
-    "Input the family name",
-    default=next(
-        iter(families),
-        "unknown_family",
-    ),
-)
-families.add(target_family)
-
-experiment_name = f"adjust_rule_score_for_{target_family}"
-experiment = mlflow.set_experiment(experiment_name)
-mlflow.set_experiment_tag("families", " ".join(sorted(families)))
-
-from datetime import datetime
-run_name = datetime.now().isoformat(timespec="seconds")
-run = mlflow.start_run(experiment_id=experiment.experiment_id, run_name=run_name)
-
-model_module = sys.modules[model.__class__.__module__]
-if model_module is None:
-    code_path = str(Path(model_module.__file__).resolve())
-else:
-    code_path = None
-
-# %%
-from mlflow.types.schema import Schema, ColSpec
-log_model(
-    pytorch_model=model,
-    code_paths=code_path
-)
-
-# %%
-# Train
-def train_one_epoch(dataloader, model, loss_fn, optimizer):
+def train_one_epoch(
+    dataloader: DataLoader,
+    model: torch.nn.Module,
+    loss_fn: torch.nn.Module,
+    optimizer: Optimizer,
+    device: torch.device,
+) -> float:
     total_loss = 0.0
 
     for batch_idx, data in enumerate(dataloader):
-        # Every data instance is an input + label pair
         inputs, labels = data
         inputs, labels = inputs.to(device), labels.to(device)
 
-        # Zero your gradients for every batch!
         optimizer.zero_grad()
-
-        # Make predictions for this batch
         outputs = model(inputs)
-
-        # Compute the loss and its gradients
         loss = loss_fn(outputs, labels)
         loss.backward()
-
-        # Adjust learning weights
         optimizer.step()
 
-        # Gather data and report
-        total_loss += loss.item()    
-    
+        total_loss += loss.item()
+
     average_loss = total_loss / len(dataloader)
     return average_loss
 
-# %%
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-)
-import json
 
-def evaluate(dataloader, model):
-    model.eval()
-    with torch.no_grad():
-        
-        y_pred_batches, y_truth_batches = [], []
-        for x, y_truth in dataloader:
-            y_pred_batches.append(model(x).item())
-            y_truth_batches.append(y_truth)
-        
-        y_pred = torch.cat(y_pred_batches, dim=0)
-        y_truth = torch.cat(y_truth_batches, dim=0)
-        
-        metrics = {
-            "accuracy": accuracy_score(y_truth, y_pred),
-            "precision": precision_score(y_truth, y_pred),
-            "recall": recall_score(y_truth, y_pred),
-            "f1": f1_score(y_truth, y_pred),
-        }
-        
-        mlflow.log_metrics(metrics)
-        print(json.dumps(metrics, indent=4))
-        
-        
-
-# %%
-# Initializing in a separate cell so we can easily add more epochs to the same run
-from torch.utils.tensorboard.writer import SummaryWriter
-from datetime import datetime
-from tqdm import tqdm
-
-def load_model_from_path(model_path, model):
+def load_model_from_path(model_path: str, model: torch.nn.Module) -> None:
     model.load_state_dict(torch.load(model_path, weights_only=True))
 
 
-def run_epochs(learning_rate, model, epochs=100):
-    # Optimizer
+def run_epochs(
+    learning_rate: float,
+    model: torch.nn.Module,
+    epochs: int,
+    dataloader: DataLoader,
+    loss_fn: torch.nn.Module,
+    device: torch.device,
+) -> Tuple[Optional[str], float]:
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.1)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    writer = SummaryWriter("runs/fashion_trainer_{}".format(timestamp))
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     epoch_number = 0
-
-    EPOCHS = epochs
     model_path = None
-
     best_vloss = 1_000_000.0
 
-    from tqdm import tqdm
-
-    for epoch in tqdm(list(range(EPOCHS))):
-        # print("EPOCH {}:".format(epoch_number + 1))
-        # print(f"learning rate: {optimizer.param_groups[0]['lr']}")
-
-        # Make sure gradient tracking is on, and do a pass over the data
+    for epoch in tqdm.tqdm(list(range(epochs))):
         model.train(True)
         avg_loss = train_one_epoch(
             dataloader=dataloader,
             model=model,
             loss_fn=loss_fn,
-            optimizer=optimizer)
+            optimizer=optimizer,
+            device=device,
+        )
 
         running_vloss = 0.0
-        # Set the model to evaluation mode, disabling dropout and using population
-        # statistics for batch normalization.
         model.eval()
 
-        # Disable gradient computation and reduce memory consumption.
         with torch.no_grad():
             for i, vdata in enumerate(dataloader):
                 vinputs, vlabels = vdata
                 vinputs, vlabels = vinputs.to(device), vlabels.to(device)
                 voutputs = model(vinputs)
                 vloss = loss_fn(voutputs, vlabels)
-
                 running_vloss += vloss
 
         avg_vloss = running_vloss / (i + 1)
         print(
-            "EP {}, LR {}, LOSS train {} valid {}".format(
-                epoch_number + 1,
-                optimizer.param_groups[0]["lr"],
-                avg_loss,
-                avg_vloss,
-            )
+            f"EP {epoch_number + 1}, LR {optimizer.param_groups[0]['lr']}, "
+            f"LOSS train {avg_loss} valid {avg_vloss}"
         )
 
-        # Log the running loss averaged per batch
-        # for both training and validation
-        writer.add_scalars(
-            "Training vs. Validation Loss",
-            {"Training": avg_loss, "Validation": avg_vloss},
-            epoch_number + 1,
-        )
-        writer.flush()
-
-        # Track best performance, and save the model's state
         if avg_vloss < best_vloss:
             best_vloss = avg_vloss
-            model_folder = Path("model_logs")
+            model_folder = Path(tempfile.gettempdir()) / "model_logs"
             model_folder.mkdir(parents=True, exist_ok=True)
-            model_path = "model_logs/model_{}_{}".format(
-                timestamp, epoch_number
-            )
+            model_path = str(model_folder / f"model_{timestamp}_{epoch_number}")
             torch.save(model.state_dict(), model_path)
 
         epoch_number += 1
 
-    return model_path
+    return model_path, best_vloss
 
-# %%
-accuracy = 0
-step = 0
-best_model_param_path = None
-# %%
-import mlflow.pytorch
-for i in range(1):
-    if accuracy == 1.0:
-        break
 
-    lrs = [0.1] * 1
-    epochs = 100
-    for lr in lrs:
-        mlflow.log_metrics(
-            {
-                "learning_rate": lr,
-                "epochs": epochs
-            },
-            step=step
+def model_inference(model: torch.nn.Module, x: torch.Tensor) -> float:
+    with torch.no_grad():
+        return model(x).item()
+
+
+def model_calculate(model: torch.nn.Module, x: torch.Tensor) -> Any:
+    with torch.no_grad():
+        return model.calculate_apk_scores(x)
+
+
+def prepare_data(
+    path_to_rule_list: List[Path],
+    path_to_apk_list: List[Path],
+    builtin_apk_list: Optional[Path] = None,
+) -> Tuple[dataset_lib.ApkDataset, DataLoader, List[str]]:
+    """Loads and preprocesses data."""
+    rules = (
+        pl.concat(pl.read_csv(p, columns="rule") for p in path_to_rule_list)["rule"]
+        .unique()
+        .to_list()
+    )
+    rule_paths = [rule_lib.get(r) for r in rules]
+
+    sha256_table = pl.concat(
+        pl.read_csv(p, columns=["sha256", "is_malicious"]) for p in path_to_apk_list
+    )
+    original_apk_info_list = [
+        ApkInfo(sha256, is_malicious, rule_paths)
+        for sha256, is_malicious in tqdm.tqdm(
+            sha256_table.rows(),
+            total=len(sha256_table),
+            desc="Preparing APK analysis results",
         )
-        
-        best_model_param_path = run_epochs(lr, model, epochs=epochs)
-        step += epochs
-        if best_model_param_path is not None:
-            load_model_from_path(best_model_param_path, model)
+    ]
 
-    print("Down")
+    apk_info_list: Iterable[ApkInfo] = original_apk_info_list
 
-    from sklearn.metrics import (
-        accuracy_score,
-        precision_score,
-        recall_score,
-        f1_score,
+    print("Filter out apk not exits.")
+    apk_not_exist = lambda info: info.path is None or not info.path.exists()
+    apk_info_list = list(show_and_filter(apk_info_list, apk_not_exist))
+
+    print("Filter out apk have no analysis result.")
+    apk_no_analysis_result = lambda info: info.analysis_result is None or any(
+        v < 0 for v in info.analysis_result.values()
+    )
+    apk_info_list = list(show_and_filter(apk_info_list, apk_no_analysis_result))
+
+    print("Filter out apk didn't pass 5 stage on any rule.")
+    apk_no_passing_5_stage = lambda info: info.analysis_result is None or not any(
+        v >= 5 for v in info.analysis_result.values()
+    )
+    apk_info_list = list(show_and_filter(apk_info_list, apk_no_passing_5_stage))
+
+    print("Filter out apks that Quark failed to analyze due to memory issue.")
+    memory_issue_apks = {"00015824995BC2F452BBDE2833F79423A8DC6DA8364A641DFB6D068D44C557DF"}
+    apk_info_list = list(
+        show_and_filter(apk_info_list, lambda info: info.sha256 in memory_issue_apks)
     )
 
-    if best_model_param_path is not None:
+    print("Balance the dataset by removing extra benign APKs.")
+    benign_counter = count()
+    num_of_malware = sum(1 for info in apk_info_list if info.is_malicious == 1)
+    malicious_or_enough_benign = (
+        lambda info: info.is_malicious != 1 and next(benign_counter) >= num_of_malware
+    )
+    apk_info_list = list(show_and_filter(apk_info_list, malicious_or_enough_benign))
+
+    malware_sha256 = {apk.sha256 for apk in original_apk_info_list if apk.is_malicious == 1}
+    all_sha256s = {apk.sha256 for apk in apk_info_list}
+    missing_malware = [m for m in malware_sha256 if m not in all_sha256s]
+    # assert len(missing_malware) == 0, f"Missing malware samples: {missing_malware}"
+
+    builtin_samples = (
+        pl.read_csv(builtin_apk_list, columns=["sha256"])["sha256"].to_list()
+        if builtin_apk_list
+        else []
+    )
+    missing_apks = [sha256 for sha256 in builtin_samples if sha256 not in all_sha256s]
+    assert len(missing_apks) == 0, f"Missing builtin samples: {missing_apks}"
+
+    dataset_obj = dataset_lib.ApkDataset(
+        sha256s=[apk.sha256 for apk in apk_info_list],
+        is_malicious=[apk.is_malicious for apk in apk_info_list],
+        rules=rules,
+    )
+    print(f"Num of APK: {len(dataset_obj)}")
+    print(f"APK distribution: {dataset_obj.apk_info['is_malicious'].value_counts()}")
+    print(f"Num of rules: {len(dataset_obj.rules)}")
+
+    dataset_obj.preload()
+
+    dataloader = DataLoader(dataset_obj, batch_size=len(dataset_obj), shuffle=True)
+    return dataset_obj, dataloader, rules
+
+
+def setup_model(num_rules: int) -> Tuple[RuleAdjustmentModel, torch.device, torch.nn.Module]:
+    """Initializes model, device, and loss function."""
+    assert torch.cuda.is_available()
+    device = torch.device("cuda")
+
+    model = RuleAdjustmentModel(num_rules)
+    model = model.to(device)
+    loss_fn = torch.nn.BCELoss().to(device)
+    return model, device, loss_fn
+
+
+def setup_mlflow(
+    run_id: Optional[str],
+    target_family: Optional[str],
+    model: torch.nn.Module,
+    path_to_apk_list: List[Path],
+) -> Tuple[Run, int]:
+    """Sets up MLflow for a new or resumed run."""
+    mlflow.set_tracking_uri(uri="http://localhost:5000")
+    step = 0
+    if run_id:
+        run = mlflow.start_run(run_id=run_id)
+        client = mlflow.tracking.MlflowClient()
+        artifacts = client.list_artifacts(run_id)
+        checkpoints = [a.path for a in artifacts if a.path.startswith("checkpoint_")]
+
+        if checkpoints:
+            latest_checkpoint = max(checkpoints, key=lambda p: int(p.split("_")[-1]))
+            step = int(latest_checkpoint.split("_")[-1])
+            local_path = mlflow.artifacts.download_artifacts(
+                run_id=run_id, artifact_path=latest_checkpoint
+            )
+            model.load_state_dict(torch.load(local_path))
+            print(f"Resuming from run {run_id} at step {step} from checkpoint {latest_checkpoint}")
+    else:
+        if not target_family:
+            families = {p.stem for p in path_to_apk_list}
+            target_family = click.prompt(
+                "Input the family name",
+                default=next(iter(families), "unknown_family"),
+            )
+
+        families = {p.stem for p in path_to_apk_list}
+        families.add(target_family)  # type: ignore
+
+        experiment_name = f"adjust_rule_score_for_{target_family}"
+        experiment = mlflow.set_experiment(experiment_name)
+        mlflow.set_experiment_tag("families", " ".join(sorted(families)))
+
+        run_name = datetime.datetime.now().isoformat(timespec="seconds")
+        run = mlflow.start_run(experiment_id=experiment.experiment_id, run_name=run_name)
+
+        model_module = sys.modules[model.__class__.__module__]
+        code_path = None
+        if (
+            model_module is not None
+            and hasattr(model_module, "__file__")
+            and model_module.__file__ is not None
+        ):
+            code_path = [str(Path(model_module.__file__).resolve())]
+
+        log_model(pytorch_model=model, code_paths=code_path)
+    return run, step
+
+
+def train_model(
+    lrs: List[float],
+    epochs: int,
+    model: torch.nn.Module,
+    dataloader: DataLoader,
+    loss_fn: torch.nn.Module,
+    device: torch.device,
+    step: int,
+    dataset_obj: dataset_lib.ApkDataset,
+) -> Tuple[Optional[str], int, float]:
+    """Main training loop."""
+    accuracy = 0.0
+    best_model_param_path = None
+    best_vloss = 1_000_000.0
+
+    for lr in lrs:
+        if accuracy == 1.0:
+            break
+
+        mlflow.log_metrics({"learning_rate": lr, "epochs": epochs}, step=step)
+
+        current_best_path, current_vloss = run_epochs(lr, model, epochs, dataloader, loss_fn, device)
+        if current_best_path is not None:
+            if current_vloss < best_vloss:
+                best_vloss = current_vloss
+                best_model_param_path = current_best_path
+
+        step += epochs
+
+    if best_model_param_path:
         load_model_from_path(best_model_param_path, model)
 
-    def model_inference(model, x):
-        with torch.no_grad():
-            return model(x).item()
-
     x_input, y_truth = [], []
-    for x, y in dataset:
+    for x, y in dataset_obj:
         x_input.append(x.to(device))
         y_truth.append(y)
 
     y_pred_row = [model_inference(model, x) for x in x_input]
+    y_pred = [1 if y_row > 0.5 else 0 for y_row in y_pred_row]
 
+    accuracy = float(accuracy_score(y_truth, y_pred))
+    precision = float(precision_score(y_truth, y_pred))
+    recall = float(recall_score(y_truth, y_pred))
+    f1 = float(f1_score(y_truth, y_pred))
+    print(f"{accuracy=}")
+    print(f"{precision=}")
+    print(f"{recall=}")
+    print(f"{f1=}")
+
+    mlflow.pytorch.log_state_dict(model.state_dict(), artifact_path=f"checkpoint_{step}")
+
+    mlflow.log_metrics(
+        {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        },
+        step=step,
+    )
+    return best_model_param_path, step, best_vloss
+
+
+def log_results(
+    model: torch.nn.Module,
+    dataset_obj: dataset_lib.ApkDataset,
+    device: torch.device,
+    rules: List[str],
+    step: int,
+    output_csv_path: Path,
+) -> None:
+    """Logs final results and artifacts."""
+    x_input, y_truth = [], []
+    for x, y in dataset_obj:
+        x_input.append(x.to(device))
+        y_truth.append(y)
+
+    y_pred_row = [model_inference(model, x) for x in x_input]
+    y_score = [model_calculate(model, x) for x in x_input]
     y_pred = [1 if y_row > 0.5 else 0 for y_row in y_pred_row]
 
     accuracy = accuracy_score(y_truth, y_pred)
@@ -473,176 +424,196 @@ for i in range(1):
     print(f"{precision=}")
     print(f"{recall=}")
     print(f"{f1=}")
-    
-    # TODO - Use mlflow.pytorch.autologging
-    
-    mlflow.pytorch.log_state_dict(model.state_dict(), artifact_path=f"checkpoint_{step}") # type: ignore
-    
+
     mlflow.log_metrics(
         {
             "accuracy": accuracy,
             "precision": precision,
             "recall": recall,
             "f1": f1,
-        }, # type: ignore
-        step=step
+        },
+        step=step,
     )
 
-# %%
-load_model_from_path(best_model_param_path, model)
-mlflow.pytorch.log_state_dict(model.state_dict(), artifact_path=f"global_bast")
-# %%
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-)
-
-
-def model_inference(model, x):
-    with torch.no_grad():
-        return model(x).item()
-
-
-def model_calculate(model, x):
-    with torch.no_grad():
-        return model.calculate_apk_scores(x)
-
-
-x_input, y_truth = [], []
-for x, y in dataset:
-    x_input.append(x.to(device))
-    y_truth.append(y)
-
-y_pred_row = [model_inference(model, x) for x in x_input]
-y_score = [model_calculate(model, x) for x in x_input]
-
-y_pred = [1 if y_row > 0.5 else 0 for y_row in y_pred_row]
-
-accuracy = accuracy_score(y_truth, y_pred)
-precision = precision_score(y_truth, y_pred)
-recall = recall_score(y_truth, y_pred)
-f1 = f1_score(y_truth, y_pred)
-print(f"{accuracy=}")
-print(f"{precision=}")
-print(f"{recall=}")
-print(f"{f1=}")
-
-mlflow.log_metrics(
-    {
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-    },
-    step=step
-)
-
-# %%
-# Record lrs and epochs (Optional, nice to have)
-# mlflow.log_text("(Ep 50) 20, 15, 10, 5 * 3, 8, 10 (Ep 100), 10, 20, 50, 100, 500, 500, 500, 100, 10, 10, 50", "lrs_and_epochs_records.txt", run.info.run_id)s
-# %%
-# Output adjusted scores and prediction for each apk
-
-apk_prediction = pl.DataFrame(
-    {
-        "sha256": dataset.apk_info["sha256"],
-        "y_truth": y_truth,
-        "y_score": y_score,
-        "y_pred": y_pred,
-    }
-)
-
-# Prepare analysis results
-rule_paths = [rule_lib.get(rule) for rule in rules]
-
-weight_dicts = (
-    analysis_result_lib.analyze_rules(
-        sha256,
-        apk_lib.download(sha256, dry_run=True),
-        rule_paths,
-        dry_run=True,
+    apk_prediction = pl.DataFrame(
+        {
+            "sha256": dataset_obj.apk_info["sha256"],
+            "y_truth": y_truth,
+            "y_score": y_score,
+            "y_pred": y_pred,
+        }
     )
-    | {"sha256": sha256}
-    for sha256 in dataset.apk_info["sha256"]
-)
-weight_dfs = (pl.DataFrame(weight) for weight in weight_dicts)
-weights = pl.concat(weight_dfs, how="vertical")
-weights = weights.transpose(
-    include_header=True, column_names="sha256", header_name="rule"
-)
 
-# Prepare adjusts rule scores
-# rule_scores = pl.DataFrame(
-#     {"rule_score": model.get_rule_scores().cpu().detach().tolist(), "rule": rules}
-# ).with_row_index()
-
-rule_scores = dataset.rules.join(
-    pl.DataFrame(
-        {"rule_score": model.get_rule_scores().cpu().detach().tolist()}
-    ).with_row_index(),
-    on="index",
-    how="left"
-)
-
-# Combine rule_scores and weights
-weights_and_rule_scores = rule_scores.join(
-    weights, on="rule", how="left", maintain_order="left"
-)
-
-new_column_names = ["sha256", "y_truth", "y_score", "y_pred"] + weights[
-    "rule"
-].to_list()
-
-combined = (
-    weights_and_rule_scores.transpose(
-        include_header=True,
-        header_name="sha256",
-        column_names="rule",
+    rule_paths = [rule_lib.get(rule) for rule in rules]
+    weight_dicts = (
+        analysis_result_lib.analyze_rules(
+            sha256,
+            apk_lib.download(sha256, dry_run=True),
+            rule_paths,
+            dry_run=True,
+        )
+        | {"sha256": sha256}
+        for sha256 in dataset_obj.apk_info["sha256"]
     )
-    .join(apk_prediction, on="sha256", how="full", maintain_order="left")
-    .select(new_column_names)
+    weight_dfs = (pl.DataFrame(weight) for weight in weight_dicts)
+    weights = pl.concat(weight_dfs, how="vertical")
+    weights = weights.transpose(include_header=True, column_names="sha256", header_name="rule")
+
+    rule_scores = dataset_obj.rules.join(
+        pl.DataFrame(
+            {"rule_score": model.get_rule_scores().cpu().detach().tolist()}
+        ).with_row_index(),
+        on="index",
+        how="left",
+    )
+
+    weights_and_rule_scores = rule_scores.join(
+        weights, on="rule", how="left", maintain_order="left"
+    )
+
+    new_column_names = ["sha256", "y_truth", "y_score", "y_pred"] + weights["rule"].to_list()
+
+    combined = (
+        weights_and_rule_scores.transpose(
+            include_header=True,
+            header_name="sha256",
+            column_names="rule",
+        )
+        .join(apk_prediction, on="sha256", how="full", maintain_order="left")
+        .select(new_column_names)
+    )
+
+    combined.write_csv(output_csv_path, include_header=True)
+    mlflow.log_artifact(str(output_csv_path), Path(output_csv_path).name)
+
+
+@click.command()
+@click.option(
+    "--run-id",
+    "run_id",
+    type=str,
+    default=None,
+    help="MLFlow run ID to continue a previous run.",
 )
-
-combined.write_csv("apk_prediction.csv", include_header=True)
-
-mlflow.log_artifact(
-    "apk_prediction.csv",
-    "apk_prediction.csv",
-    run.info.run_id
+@click.option(
+    "--lrs",
+    "lrs_str",
+    type=str,
+    default="0.1",
+    help="Comma-separated learning rates.",
 )
+@click.option(
+    "--epochs", "epochs", type=int, default=100, help="Number of epochs for each learning rate."
+)
+@click.option(
+    "--target-family",
+    "target_family",
+    type=str,
+    default=None,
+    help="Target family for the experiment.",
+)
+@click.option(
+    "--rule-list",
+    "rule_list",
+    multiple=True,
+    default=(
+        "/mnt/storage/data/rule_to_release/golddream/rule_added.csv",
+        "/mnt/storage/data/rule_to_release/default_rules.csv",
+    ),
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
+    help="Path to a rule list file. Can be specified multiple times.",
+)
+@click.option(
+    "--apk-list",
+    "apk_list",
+    multiple=True,
+    default=(
+        "data/lists/family/droidkungfu.csv",
+        "data/lists/family/basebridge.csv",
+        "data/lists/family/golddream.csv",
+        "data/lists/benignAPKs_top_0.4_vt_scan_date.csv",
+    ),
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
+    help="Path to an APK list file. Can be specified multiple times.",
+)
+@click.option(
+    "--output-csv",
+    "output_csv_path",
+    default="apk_prediction.csv",
+    type=click.Path(file_okay=True, dir_okay=False, writable=True, path_type=Path),
+    help="Path to save the output CSV file.",
+)
+def main(
+    run_id: Optional[str],
+    lrs_str: str,
+    epochs: int,
+    target_family: Optional[str],
+    rule_list: Tuple[Path, ...],
+    apk_list: Tuple[Path, ...],
+    output_csv_path: Path,
+) -> None:
+    """Main function for the CLI tool."""
+    lrs = [float(lr) for lr in lrs_str.split(",")]
 
-# %%
-# Close Run
-mlflow.end_run()
+    dataset_obj, dataloader, rules = prepare_data(list(rule_list), list(apk_list))
+    model, device, loss_fn = setup_model(len(rules))
+    run, step = setup_mlflow(run_id, target_family, model, list(apk_list))
 
-# %%
-# Apply Rule scores
-# if input("Apply the rule scores? (Y/N)").lower() == "N":
-#     sys.exit(0)
+    best_model_param_path, step, best_vloss = train_model(
+        lrs, epochs, model, dataloader, loss_fn, device, step, dataset_obj
+    )
 
-# # PATH_TO_RULES = "/Users/shengfeng/codespace/quark-rules/rules"
-# rule_index = pl.read_csv(
-#     "data/rule_top_1000_index.csv",
-#     has_header=True,
-#     columns=["index", "rule_path"],
-# )
+    current_lrs = lrs
 
-# optimized_rule_score = rule_index.with_row_index()
+    while True:
+        try:
+            print(f"\nCurrent learning rates: {current_lrs}")
+            prompt = (
+                "Enter new learning rates (comma-separated), "
+                "'r' to restore best model, or press Ctrl+D to stop the training: "
+            )
+            user_input = input(prompt).strip()
 
-# combine = rule_index.join(on="index", how="left")
+            if not user_input:
+                continue
 
-# for row in combine.to_dicts():
-#     ruleId, rule_path = row["index"], row["rule_path"]
-#     if not os.path.exists(rule_path):
-#         continue
+            if user_input.lower() == "r":
+                if best_model_param_path:
+                    print(
+                        f"Restoring model from {best_model_param_path} with vloss {best_vloss}"
+                    )
+                    load_model_from_path(best_model_param_path, model)
+                else:
+                    print("No best model to restore yet.")
+                continue
 
-#     value = round(row["rule_score"], 2)
-#     print(f"更新 {rule_path} 規則分數為 {value}")
-#     with open(rule_path, "r") as f:
-#         rule_data = json.loads(f.read())
-#         rule_data["score"] = value
+            new_lrs = [float(lr) for lr in user_input.split(",")]
+            current_lrs = new_lrs
 
-#     with open(rule_path, "w") as f:
-#         json.dump(rule_data, f, indent=4)
+            new_best_path, step, new_vloss = train_model(
+                new_lrs, epochs, model, dataloader, loss_fn, device, step, dataset_obj
+            )
+
+            if new_best_path and new_vloss < best_vloss:
+                best_model_param_path = new_best_path
+                best_vloss = new_vloss
+
+        except EOFError:
+            print("\nExiting interactive training session.")
+            break
+        except (ValueError, IndexError):
+            print("Invalid input. Please enter a comma-separated list of numbers.")
+
+    if best_model_param_path:
+        load_model_from_path(best_model_param_path, model)
+    mlflow.pytorch.log_state_dict(model.state_dict(), artifact_path="global_best")
+
+    log_results(model, dataset_obj, device, rules, step, output_csv_path)
+
+    mlflow.end_run()
+
+
+
+
+if __name__ == "__main__":
+    main()
