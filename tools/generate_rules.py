@@ -123,16 +123,16 @@ def generate_rules_for_apk_list(apk_lists: list[Path], output_folder: Path, reru
     help="List of APKs to process.",
 )
 @click.option(
-    "--output_rule_folder",
-    "-r",
+    "--working_folder",
+    "-w",
     type=click.Path(path_type=Path),
     required=False,
     envvar="RULE_FOLDER",
     help="Folder to save generated rules, defaults to RULE_FOLDER environment variable.",
 )
 @click.option(
-    "--working_folder",
-    "-w",
+    "--output_folder",
+    "-o",
     type=click.Path(path_type=Path),
     required=False,
     default=Path(tempfile.gettempdir()) / "rules_working",
@@ -144,23 +144,23 @@ def generate_rules_for_apk_list(apk_lists: list[Path], output_folder: Path, reru
     default=False,
     help="Rerun rule generation for APKs that previously failed.",
 )
-def generate_and_collect_rules(apk_list: list[Path], output_rule_folder: Path, working_folder: Path, rerun_failed: bool) -> None:
+def generate_and_collect_rules(apk_list: list[Path], working_folder: Path, output_folder: Path, rerun_failed: bool) -> None:
     """
     Generate rules from a list of APKs and save them to the specified output folder.
 
     Example usage:
-    uv run tools/generate_rules.py -a data/lists/maliciousAPKs_test.csv -r data/generated_rules -w data/rules/
+    uv run tools/generate_rules.py -a data/lists/maliciousAPKs_test.csv -w data/generated_rules -o data/rules/
     """
-    output_rule_folder.mkdir(exist_ok=True)
     working_folder.mkdir(exist_ok=True)
+    output_folder.mkdir(exist_ok=True)
     
-    generate_rules_for_apk_list(apk_list, output_rule_folder, rerun_failed)
+    generate_rules_for_apk_list(apk_list, working_folder, rerun_failed)
     
-    rename_rule_files_in_folder_recursively(output_rule_folder)
+    rename_rule_files_in_folder_recursively(working_folder)
     
-    create_rule_links(working_folder, output_rule_folder)
+    create_rule_links(output_folder, working_folder)
     
-    print(f"Rule generation completed. Rules saved to {output_rule_folder.resolve()}")
+    print(f"Rule generation completed. Rules saved to {working_folder.resolve()}")
 
 
 if __name__ == "__main__":
