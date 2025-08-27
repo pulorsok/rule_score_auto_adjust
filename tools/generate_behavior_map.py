@@ -175,6 +175,8 @@ def entry_point(apk_list: Path, rule_folder: Path) -> None:
     uv run tools/generate_behavior_map.py -a /mnt/storage/data/rule_to_release/droidkungfu/droidkungfu.csv -r /mnt/storage/quark-rules/rules/
 
     """
+    apk_list = apk_list.resolve()
+    rule_folder = rule_folder.resolve()
     behavior_map_folder = generate_behavior_map_from_apk_list_and_rule_folder(
         apk_list=apk_list,
         rule_folder=rule_folder,
