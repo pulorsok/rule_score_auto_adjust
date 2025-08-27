@@ -26,7 +26,7 @@ cp .env.template .env
 
 6. Load the `.env` file
 ```
-cp .env.template .env
+set -a && source .env && set +a
 ```
 
 7. Run scripts. Take download APKs as an example.

@@ -103,7 +103,7 @@ def analyze_apk_parallelly(apk_list: list[Path], rule_folder: list[Path], output
     """Analyze APKs from a list using rules from a specified folder.
 
     Example usage:
-    uv run tools/analyze_apk.py -a data/lists/family/basebridge.csv -a data/lists/family/golddream.csv -a data/lists/benignAPKs_top_0.4_vt_scan_date.csv -r /tmp/rule_folder
+    uv run tools/analyze_apk.py -a data/lists/family/droidkungfu_test.csv -a data/lists/benignAPKs_top_0.4_vt_scan_date.csv -r data/test_rules
     """
     mem_bytes = 22 * 1024 * 1024 * 1024  # 20 GB
     resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
