@@ -19,7 +19,7 @@ dotenv.load_dotenv()
 )
 def download_apk_from_list(apk_list: list[Path]) -> None:
     """
-    Process a list of APKs and save them to the specified output folder.
+    Process a list of APKs and save them to the folder specified by the environment variable APK_FOLDER.
 
     Example usage:
     uv run tools/download_apk.py -a data/lists/family/droidkungfu_test.csv

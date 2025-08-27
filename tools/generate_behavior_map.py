@@ -44,7 +44,9 @@ def create_behavior_map_folder():
     cache_policy=cache_policies.INPUTS,
     cache_expiration=datetime.timedelta(days=31),
 )
-def generate_behavior_map(apk: Path, rule_folder: Path, out_folder: Path) -> tuple[Path, Path, Path] | None:
+def generate_behavior_map(
+    apk: Path, rule_folder: Path, out_folder: Path
+) -> tuple[Path, Path, Path] | None:
     with tempfile.TemporaryDirectory() as working_folder:
         commands = [
             "quark",
@@ -106,7 +108,7 @@ def generate_behavior_maps(
     # Wait for all tasks to complete and update the progress artifact
     for idx, future in enumerate(futures):
         future.result()
-        update_progress_artifact(artifact_id=progress_artifact_id, progress=step * (idx + 1)) # type: ignore
+        update_progress_artifact(artifact_id=progress_artifact_id, progress=step * (idx + 1))  # type: ignore
 
     return out_folder
 
@@ -116,11 +118,15 @@ def generate_behavior_map_from_apk_prediction(apk_prediction: Path, apk_list: Pa
     rule_folder = collect_rules_to_folder_from_apk_prediction(apk_prediction)
     print(f"{rule_folder=}")
 
-    return generate_behavior_map_from_apk_list_and_rule_folder(apk_list=apk_list, rule_folder=rule_folder)
+    return generate_behavior_map_from_apk_list_and_rule_folder(
+        apk_list=apk_list, rule_folder=rule_folder
+    )
 
 
 @flow
-def generate_behavior_map_from_apk_list_and_rule_list(apk_list: Path, rule_list: Path, add_builtin_rules: bool) -> Path:
+def generate_behavior_map_from_apk_list_and_rule_list(
+    apk_list: Path, rule_list: Path, add_builtin_rules: bool
+) -> Path:
     rule_names = pl.read_csv(str(rule_list))["rule"].to_list()
 
     rule_folder = collect_rules_to_folder(rule_names=rule_names)
@@ -134,10 +140,12 @@ def generate_behavior_map_from_apk_list_and_rule_list(apk_list: Path, rule_list:
             rule_folder=rule_folder,
         )
 
-    return generate_behavior_map_from_apk_list_and_rule_folder(apk_list=apk_list, rule_folder=rule_folder)
+    return generate_behavior_map_from_apk_list_and_rule_folder(
+        apk_list=apk_list, rule_folder=rule_folder
+    )
 
 
-@flow(task_runner=RayTaskRunner()) # type: ignore
+@flow(task_runner=RayTaskRunner())  # type: ignore
 def generate_behavior_map_from_apk_list_and_rule_folder(apk_list: Path, rule_folder: Path) -> Path:
     sha256s = pl.read_csv(str(apk_list), columns=["sha256"]).to_series().to_list()
 
@@ -152,21 +160,28 @@ def generate_behavior_map_from_apk_list_and_rule_folder(apk_list: Path, rule_fol
 
 
 @click.command()
-@click.argument("apk_list", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path))
-@click.argument("rule_folder", type=click.Path(exists=True, file_okay=False, readable=True, path_type=Path))
-def entry_point(apk_list:Path, rule_folder: Path) -> None:
+@click.option(
+    "--apk_list", "-a", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=Path)
+)
+@click.option(
+    "--rule_folder",
+    "-r",
+    type=click.Path(exists=True, file_okay=False, readable=True, path_type=Path),
+)
+def entry_point(apk_list: Path, rule_folder: Path) -> None:
     """Generate behavior map from a list of APKs and a rule folder.
 
     Example usage:
-    uv run tools/generate_behavior_map.py /mnt/storage/data/rule_to_release/droidkungfu/droidkungfu.csv /mnt/storage/quark-rules/rules/
-    
+    uv run tools/generate_behavior_map.py -a /mnt/storage/data/rule_to_release/droidkungfu/droidkungfu.csv -r /mnt/storage/quark-rules/rules/
+
     """
     behavior_map_folder = generate_behavior_map_from_apk_list_and_rule_folder(
         apk_list=apk_list,
         rule_folder=rule_folder,
     )
-    
+
     print(f"Behavior map folder created at: {behavior_map_folder}")
+
 
 if __name__ == "__main__":
     mem_bytes = 22 * 1024 * 1024 * 1024  # 20 GB

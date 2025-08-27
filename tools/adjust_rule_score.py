@@ -13,6 +13,7 @@ To continue a previous run:
 python tools/adjust_rule_score.py --run-id <mlflow_run_id> --lrs 0.01 --epochs 50
 """
 
+import copy
 import datetime
 import sys
 from dataclasses import dataclass
@@ -42,7 +43,6 @@ from mlflow.pytorch import log_model
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from torch.optim import Optimizer
 from torch.utils.data.dataloader import DataLoader
-from torch.utils.tensorboard.writer import SummaryWriter
 import data_preprocess.apk as apk_lib
 import data_preprocess.rule as rule_lib
 
@@ -407,23 +407,7 @@ def log_results(
     output_csv_path: Path,
 ) -> None:
     """Logs final results and artifacts."""
-    x_input, y_truth = [], []
-    for x, y in dataset_obj:
-        x_input.append(x.to(device))
-        y_truth.append(y)
-
-    y_pred_row = [model_inference(model, x) for x in x_input]
-    y_score = [model_calculate(model, x) for x in x_input]
-    y_pred = [1 if y_row > 0.5 else 0 for y_row in y_pred_row]
-
-    accuracy = accuracy_score(y_truth, y_pred)
-    precision = precision_score(y_truth, y_pred)
-    recall = recall_score(y_truth, y_pred)
-    f1 = f1_score(y_truth, y_pred)
-    print(f"{accuracy=}")
-    print(f"{precision=}")
-    print(f"{recall=}")
-    print(f"{f1=}")
+    y_truth, y_score, y_pred, accuracy, precision, recall, f1 = calculate_metrics(model, dataset_obj, device)
 
     mlflow.log_metrics(
         {
@@ -485,6 +469,26 @@ def log_results(
 
     combined.write_csv(output_csv_path, include_header=True)
     mlflow.log_artifact(str(output_csv_path), Path(output_csv_path).name)
+
+def calculate_metrics(model, dataset_obj, device):
+    x_input, y_truth = [], []
+    for x, y in dataset_obj:
+        x_input.append(x.to(device))
+        y_truth.append(y)
+
+    y_pred_row = [model_inference(model, x) for x in x_input]
+    y_score = [model_calculate(model, x) for x in x_input]
+    y_pred = [1 if y_row > 0.5 else 0 for y_row in y_pred_row]
+
+    accuracy = accuracy_score(y_truth, y_pred)
+    precision = precision_score(y_truth, y_pred)
+    recall = recall_score(y_truth, y_pred)
+    f1 = f1_score(y_truth, y_pred)
+    print(f"{accuracy=}")
+    print(f"{precision=}")
+    print(f"{recall=}")
+    print(f"{f1=}")
+    return y_truth,y_score,y_pred,accuracy,precision,recall,f1
 
 
 @click.command()
@@ -609,7 +613,60 @@ def main(
     mlflow.pytorch.log_state_dict(model.state_dict(), artifact_path="global_best")
 
     log_results(model, dataset_obj, device, rules, step, output_csv_path)
+    
+    # Enter a loop to allow user to round model scores in various precisions
+    model_score_backup = model.state_dict()
+    while True:
+        try:
+            precision_input = input(
+                "\nEnter the number of decimal places to round rule scores, 'r' to revert rule scores, 's' to show current rule scores, 't' to test the performance, or press Ctrl+D to exit (default is 2): "
+            ).strip()
+            if not precision_input:
+                continue
 
+            if precision_input.lower() == "r":
+                print("Reverting the sign of the model scores.")
+                current_model_scroes = model.state_dict()
+                current_model_scroes["rule_scores"] = torch.negative(current_model_scroes["rule_scores"])
+                model.load_state_dict(current_model_scroes)
+                print()
+                continue
+                
+            elif precision_input.lower() == "s":
+                print("Showing the current model scores")
+                current_model_scroes = model.state_dict()
+                print(current_model_scroes["rule_scores"])
+                print()
+                continue
+                
+            elif precision_input.lower() == "t":
+                print("Testing the performance with current model scores")
+                calculate_metrics(model, dataset_obj, device)
+                print()
+                continue
+
+            precision = int(precision_input)
+            if precision < 0:
+                print("Please enter a non-negative integer for precision.")
+                continue
+
+            rounded_model_scores = copy.deepcopy(model_score_backup)
+            rounded_model_scores['rule_scores'] = torch.round(
+                model_score_backup['rule_scores'], decimals=precision)
+            
+            model.load_state_dict(rounded_model_scores)
+            print(f"Rounded rule scores (to {precision} decimal places):")
+            
+            calculate_metrics(model, dataset_obj, device)
+            
+        except EOFError:
+            print("\nExiting rounding session.")
+            break
+        except ValueError:
+            print("Invalid input. Please enter a non-negative integer.")
+    
+    print("Save final results with new model scores.")
+    log_results(model, dataset_obj, device, rules, step, output_csv_path)
     mlflow.end_run()
 
 

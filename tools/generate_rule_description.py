@@ -46,7 +46,9 @@ class RuleDescriptionAgent:
     def get_description(self, api_pair) -> str:
         messages = [
             SystemMessage(content=self.system_prompt),
-            HumanMessage(content=self.user_prompt_template.format(api1=api_pair[0], api2=api_pair[1])),
+            HumanMessage(
+                content=self.user_prompt_template.format(api1=api_pair[0], api2=api_pair[1])
+            ),
         ]
         return self.chat_model.invoke(messages).content.strip()  # type: ignore
 
@@ -79,7 +81,10 @@ def get_rule_description(rules: list[Path], openai_api_key: str) -> list[tuple[s
     help="Path to the folder containing rules.",
 )
 @click.option(
-    "--openai_api_key", required=True, help="OpenAI API key for accessing the model.", envvar="OPENAI_API_KEY"
+    "--openai_api_key",
+    required=True,
+    help="OpenAI API key for accessing the model, defaults to OPENAI_API_KEY environment variable.",
+    envvar="OPENAI_API_KEY",
 )
 @click.option(
     "--write",
@@ -100,7 +105,9 @@ def entry_point(rule_folder: Path, openai_api_key: str, write: bool):
         openai_api_key=openai_api_key,
     )
 
-    print(f"Generated {len(file_description_pairs)} rule descriptions:\n{json.dumps(file_description_pairs, indent=4)}")
+    print(
+        f"Generated {len(file_description_pairs)} rule descriptions:\n{json.dumps(file_description_pairs, indent=4)}"
+    )
 
     if write:
         print(f"Writing descriptions to rules...")

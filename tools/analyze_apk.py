@@ -36,7 +36,7 @@ def analyze_apk(row: Dict[str, Any], rules: list[Path]) -> list[Dict[str, Any]]:
     ]
 
 
-def analyze_apks(sha256s: list[str], rules: list[Path], output_folder: Path):
+def analyze_apks(sha256s: list[str], rules: list[Path], output_csv: Path):
     ray.init()
 
     sha256s_pl = pd.DataFrame({"sha256": sha256s})
@@ -57,7 +57,7 @@ def analyze_apks(sha256s: list[str], rules: list[Path], output_folder: Path):
     dataset = dataset.flat_map(partial_analyze_apk)
     
     # Write dataset to CSV
-    dataset.write_csv(str(output_folder))
+    dataset.write_csv(str(output_csv))
 
     # success_sha256s = dataset["sha256"].to_list()
     # print(f"Complete analysis {len(sha256s)} APKs on {len(rules)} rules")
@@ -92,14 +92,14 @@ def analyze_apks(sha256s: list[str], rules: list[Path], output_folder: Path):
     help="Folder containing rules to use for analysis.",
 )
 @click.option(
-    "--output_folder",
+    "--output_csv",
     "-o",
     type=click.Path(file_okay=False, path_type=Path),
     required=True,
     default=Path("analysis_results"),
     help="Output folder to show analysis results.",
 )
-def analyze_apk_parallelly(apk_list: list[Path], rule_folder: list[Path], output_folder: Path):
+def analyze_apk_parallelly(apk_list: list[Path], rule_folder: list[Path], output_csv: Path):
     """Analyze APKs from a list using rules from a specified folder.
 
     Example usage:
@@ -120,7 +120,7 @@ def analyze_apk_parallelly(apk_list: list[Path], rule_folder: list[Path], output
     rules = [rule for folder in rule_folder for rule in folder.rglob("*.json") if rule.is_file()]
 
     print(f"Analyzing {len(sha256s)} APKs with {len(rules)} rules")
-    analyze_apks(sha256s, rules, output_folder)
+    analyze_apks(sha256s, rules, output_csv)
 
 
 if __name__ == "__main__":
