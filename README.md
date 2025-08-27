@@ -23,3 +23,5 @@ cp .env.template .env
 ```
 uv run tools/collect_apk_by_family.py --help
 ```
+
+6. It's recommended to open this project using the `rule_score_auto_adjust_haeter.code-workspace` file.
