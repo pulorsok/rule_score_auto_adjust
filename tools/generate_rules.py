@@ -128,6 +128,7 @@ def generate_rules_for_apk_list(apk_lists: list[Path], output_folder: Path, reru
     type=click.Path(path_type=Path),
     required=False,
     envvar="RULE_FOLDER",
+    default=Path("working_folder"),
     help="Folder to save generated rules, defaults to RULE_FOLDER environment variable.",
 )
 @click.option(
@@ -135,7 +136,7 @@ def generate_rules_for_apk_list(apk_lists: list[Path], output_folder: Path, reru
     "-o",
     type=click.Path(path_type=Path),
     required=False,
-    default=Path(tempfile.gettempdir()) / "rules_working",
+    default=Path("output_folder"),
     help="Folder to flat the generated rules, defaults to a temp folder.",
 )
 @click.option(

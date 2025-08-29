@@ -1,4 +1,3 @@
-# 載入 APK 清單
 from pathlib import Path
 import click
 import polars as pl

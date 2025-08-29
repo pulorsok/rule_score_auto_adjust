@@ -1,4 +1,6 @@
 
+### How to setup the environment
+
 1. Install `uv`
 
 2. Clone the repo
@@ -35,3 +37,7 @@ uv run tools/collect_apk_by_family.py --help
 ```
 
 8. It's recommended to open this project using the `rule_score_auto_adjust_haeter.code-workspace` file.
+
+### How to run the process
+
+![alt text](process_of_preparing_rules_for_malware_family.png)
