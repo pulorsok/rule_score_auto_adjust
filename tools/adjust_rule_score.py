@@ -44,7 +44,6 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 from torch.optim import Optimizer
 from torch.utils.data.dataloader import DataLoader
 import data_preprocess.apk as apk_lib
-import data_preprocess.rule as rule_lib
 
 import data_preprocess.analysis_result as analysis_result_lib
 from data_preprocess import dataset as dataset_lib
@@ -84,9 +83,7 @@ def show_and_filter(
         else:
             yield apk_info
 
-    print(
-        f'Drop {len(to_drop)} APKs'
-    )
+    print(f"Drop {len(to_drop)} APKs")
     if to_drop:
         print("Dropped APKs (sha256):")
         for apk_info in to_drop:
@@ -186,17 +183,12 @@ def model_calculate(model: torch.nn.Module, x: torch.Tensor) -> Any:
 
 
 def prepare_data(
-    path_to_rule_list: List[Path],
+    rule_paths: List[Path],
     path_to_apk_list: List[Path],
     builtin_apk_list: Optional[Path] = None,
 ) -> Tuple[dataset_lib.ApkDataset, DataLoader, List[str]]:
     """Loads and preprocesses data."""
-    rules = (
-        pl.concat(pl.read_csv(p, columns="rule") for p in path_to_rule_list)["rule"]
-        .unique()
-        .to_list()
-    )
-    rule_paths = [rule_lib.get(r) for r in rules]
+    rules = [rule.name for rule in rule_paths]
 
     sha256_table = pl.concat(
         pl.read_csv(p, columns=["sha256", "is_malicious"]) for p in path_to_apk_list
@@ -356,7 +348,9 @@ def train_model(
 
         mlflow.log_metrics({"learning_rate": lr, "epochs": epochs}, step=step)
 
-        current_best_path, current_vloss = run_epochs(lr, model, epochs, dataloader, loss_fn, device)
+        current_best_path, current_vloss = run_epochs(
+            lr, model, epochs, dataloader, loss_fn, device
+        )
         if current_best_path is not None:
             if current_vloss < best_vloss:
                 best_vloss = current_vloss
@@ -402,12 +396,14 @@ def log_results(
     model: torch.nn.Module,
     dataset_obj: dataset_lib.ApkDataset,
     device: torch.device,
-    rules: List[str],
+    rule_paths: Tuple[Path],
     step: int,
     output_csv_path: Path,
 ) -> None:
     """Logs final results and artifacts."""
-    y_truth, y_score, y_pred, accuracy, precision, recall, f1 = calculate_metrics(model, dataset_obj, device)
+    y_truth, y_score, y_pred, accuracy, precision, recall, f1 = calculate_metrics(
+        model, dataset_obj, device
+    )
 
     mlflow.log_metrics(
         {
@@ -428,7 +424,6 @@ def log_results(
         }
     )
 
-    rule_paths = [rule_lib.get(rule) for rule in rules]
     weight_dicts = (
         analysis_result_lib.analyze_rules(
             sha256,
@@ -470,6 +465,7 @@ def log_results(
     combined.write_csv(output_csv_path, include_header=True)
     mlflow.log_artifact(str(output_csv_path), Path(output_csv_path).name)
 
+
 def calculate_metrics(model, dataset_obj, device):
     x_input, y_truth = [], []
     for x, y in dataset_obj:
@@ -488,7 +484,7 @@ def calculate_metrics(model, dataset_obj, device):
     print(f"{precision=}")
     print(f"{recall=}")
     print(f"{f1=}")
-    return y_truth,y_score,y_pred,accuracy,precision,recall,f1
+    return y_truth, y_score, y_pred, accuracy, precision, recall, f1
 
 
 @click.command()
@@ -517,15 +513,11 @@ def calculate_metrics(model, dataset_obj, device):
     help="Target family for the experiment.",
 )
 @click.option(
-    "--rule-list",
-    "rule_list",
+    "--rule-folder",
+    "rule_folder",
     multiple=True,
-    default=(
-        "/mnt/storage/data/rule_to_release/golddream/rule_added.csv",
-        "/mnt/storage/data/rule_to_release/default_rules.csv",
-    ),
-    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
-    help="Path to a rule list file. Can be specified multiple times.",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    help="Path to a rule folder. Can be specified multiple times.",
 )
 @click.option(
     "--apk-list",
@@ -552,14 +544,18 @@ def main(
     lrs_str: str,
     epochs: int,
     target_family: Optional[str],
-    rule_list: Tuple[Path, ...],
+    rule_folder: Tuple[Path, ...],
     apk_list: Tuple[Path, ...],
     output_csv_path: Path,
 ) -> None:
     """Main function for the CLI tool."""
     lrs = [float(lr) for lr in lrs_str.split(",")]
 
-    dataset_obj, dataloader, rules = prepare_data(list(rule_list), list(apk_list))
+    rule_paths = [
+        rule for folder in rule_folder for rule in folder.rglob("*.json") if rule.is_file()
+    ]
+
+    dataset_obj, dataloader, rules = prepare_data(rule_paths, list(apk_list))
     model, device, loss_fn = setup_model(len(rules))
     run, step = setup_mlflow(run_id, target_family, model, list(apk_list))
 
@@ -574,7 +570,8 @@ def main(
             print(f"\nCurrent learning rates: {current_lrs}")
             prompt = (
                 "Enter new learning rates (comma-separated), "
-                "'r' to restore best model, or press Ctrl+D to stop the training: "
+                "'r' to restore best model,"
+                "\nor 'c' to proceed to the next step: "
             )
             user_input = input(prompt).strip()
 
@@ -583,13 +580,15 @@ def main(
 
             if user_input.lower() == "r":
                 if best_model_param_path:
-                    print(
-                        f"Restoring model from {best_model_param_path} with vloss {best_vloss}"
-                    )
+                    print(f"Restoring model from {best_model_param_path} with vloss {best_vloss}")
                     load_model_from_path(best_model_param_path, model)
                 else:
                     print("No best model to restore yet.")
                 continue
+
+            elif user_input.lower() == "c":
+                print("Proceed to the next step")
+                break
 
             new_lrs = [float(lr) for lr in user_input.split(",")]
             current_lrs = new_lrs
@@ -612,14 +611,20 @@ def main(
         load_model_from_path(best_model_param_path, model)
     mlflow.pytorch.log_state_dict(model.state_dict(), artifact_path="global_best")
 
-    log_results(model, dataset_obj, device, rules, step, output_csv_path)
-    
+    log_results(model, dataset_obj, device, list(rule_paths), step, output_csv_path)
+
     # Enter a loop to allow user to round model scores in various precisions
     model_score_backup = model.state_dict()
     while True:
         try:
             precision_input = input(
-                "\nEnter the number of decimal places to round rule scores, 'r' to revert rule scores, 's' to show current rule scores, 't' to test the performance, or press Ctrl+D to exit (default is 2): "
+                "\nEnter the number of decimal places to round rule scores,"
+                "\n'r' to revert rule scores,"
+                "\n's' to show current rule scores,"
+                "\n'x' to multiply the rule score by 10,"
+                "\n'n' to reset the current rule scores,"
+                "\n't' to test the performance,"
+                "\nor 'c' to exit (default is 2): "
             ).strip()
             if not precision_input:
                 continue
@@ -627,23 +632,43 @@ def main(
             if precision_input.lower() == "r":
                 print("Reverting the sign of the model scores.")
                 current_model_scroes = model.state_dict()
-                current_model_scroes["rule_scores"] = torch.negative(current_model_scroes["rule_scores"])
+                current_model_scroes["rule_score"] = torch.negative(
+                    current_model_scroes["rule_score"]
+                )
                 model.load_state_dict(current_model_scroes)
                 print()
                 continue
-                
+
             elif precision_input.lower() == "s":
                 print("Showing the current model scores")
                 current_model_scroes = model.state_dict()
-                print(current_model_scroes["rule_scores"])
+                print(current_model_scroes["rule_score"])
                 print()
                 continue
-                
+
             elif precision_input.lower() == "t":
                 print("Testing the performance with current model scores")
                 calculate_metrics(model, dataset_obj, device)
                 print()
                 continue
+
+            elif precision_input.lower() == "n":
+                print("Reset the model scores to the original values.")
+                model.load_state_dict(model_score_backup)
+                print()
+                continue
+
+            elif precision_input.lower() == "x":
+                print("Multiply the rule score by 10.")
+                current_model_scroes = model.state_dict()
+                current_model_scroes["rule_score"] = current_model_scroes["rule_score"] * 10
+                model.load_state_dict(current_model_scroes)
+                print()
+                continue
+            
+            elif precision_input.lower() == "c":
+                print("Proceed to the next step")
+                break
 
             precision = int(precision_input)
             if precision < 0:
@@ -651,25 +676,24 @@ def main(
                 continue
 
             rounded_model_scores = copy.deepcopy(model_score_backup)
-            rounded_model_scores['rule_scores'] = torch.round(
-                model_score_backup['rule_scores'], decimals=precision)
-            
+            rounded_model_scores["rule_score"] = torch.round(
+                model_score_backup["rule_score"], decimals=precision
+            )
+
             model.load_state_dict(rounded_model_scores)
             print(f"Rounded rule scores (to {precision} decimal places):")
-            
+
             calculate_metrics(model, dataset_obj, device)
-            
+
         except EOFError:
             print("\nExiting rounding session.")
             break
         except ValueError:
             print("Invalid input. Please enter a non-negative integer.")
-    
+
     print("Save final results with new model scores.")
-    log_results(model, dataset_obj, device, rules, step, output_csv_path)
+    log_results(model, dataset_obj, device, rule_paths, step, output_csv_path)
     mlflow.end_run()
-
-
 
 
 if __name__ == "__main__":

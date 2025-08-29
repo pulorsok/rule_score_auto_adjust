@@ -59,6 +59,9 @@ def collect_apk_by_family(apk_list: Path, family: str, output_path: Path, virus_
 
     # Filter by family
     target_dataset = sha256_with_family.filter(pl.col("middle_threat_label").eq(family))
+    
+    # Add is_malicious column
+    target_dataset = target_dataset.with_columns(pl.lit(1).alias("is_malicious"))
 
     print(f"Number of APKs in family {family}: {len(target_dataset)}")
     target_dataset.write_csv(output_path)

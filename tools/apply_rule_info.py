@@ -101,7 +101,7 @@ def apply_rule_info(
 )
 def entry_point(
     apk_prediction: Path,
-    rule_review: Path,
+    rule_info: Path,
     rule_base_folder: Path,
     revert_score: bool,
 ):
@@ -115,7 +115,7 @@ def entry_point(
     """
     apply_rule_info(
         apk_prediction=apk_prediction,
-        rule_review=rule_review,
+        rule_review=rule_info,
         rule_base_folder=rule_base_folder,
         revert_score=revert_score,
     )

@@ -85,7 +85,7 @@ def collect_rule_info_to_csv(
         .select(["rule", "description", "label", "api1", "api2"])
     )
 
-    info_table.write_csv("./rule_reviews.csv")
+    info_table.write_csv(output_csv)
     
     print(f"Collected {len(info_table)} rule info to {output_csv}")
 
