@@ -21,9 +21,9 @@ def get_apk_path(row: Dict[str, Any]) -> Dict[str, Any]:
 
 def analyze_apk(row: Dict[str, Any], rules: list[Path]) -> list[Dict[str, Any]]:
     results = analysis_result_lib.analyze_rules(
-        row["sha256"], Path(row["apk_path"]), rules
+        row["sha256"], Path(row["apk_path"]), rules, use_cache=False
     )
-    
+    print(row["apk_path"])
     def get_new_row(row, rule_name: str, confidence: int) -> Dict[str, Any]:
         new_row = row.copy()
         new_row["rule_name"] = rule_name
@@ -37,7 +37,7 @@ def analyze_apk(row: Dict[str, Any], rules: list[Path]) -> list[Dict[str, Any]]:
 
 
 def analyze_apks(sha256s: list[str], rules: list[Path], output_csv: Path):
-    ray.init()
+    ray.init(num_cpus=4)
 
     sha256s_pl = pd.DataFrame({"sha256": sha256s})
     sha256s_pl = sha256s_pl.assign(

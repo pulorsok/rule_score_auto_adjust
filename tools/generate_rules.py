@@ -63,7 +63,7 @@ def create_rule_links(target_folder: Path, source_folder: Path) -> None:
     print(f"Linking completed. Rules linked to {target_folder.resolve()}")
     
 
-@flow(name="generate_rules_from_apk_list", task_runner=RayTaskRunner(), log_prints=True)  # type: ignore
+@flow(name="generate_rules_from_apk_list", task_runner=RayTaskRunner(init_kwargs={"num_cpus": 4}), log_prints=True)  # type: ignore
 def generate_rules_for_apk_list(apk_lists: list[Path], output_folder: Path, rerun_failed: bool = False):
     cache = diskcache.FanoutCache(f"{output_folder}/rule_generation_cache")
 

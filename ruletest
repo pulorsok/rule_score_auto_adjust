@@ -1,0 +1,11 @@
+#!/usr/bin/bash
+
+# test apks with rules
+# run ./ruletest apkDirName ruleDirName
+for file in "$1"/*; do
+    if [ -f "$file" ]; then
+        echo "$file"
+        uv run quark -a "$file" -s -r $2
+    fi
+done
+

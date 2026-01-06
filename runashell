@@ -1,0 +1,18 @@
+#!/usr/bin/bash 
+
+
+set -a && source .env && set +a
+
+PATT="analyze_apk.py"
+CMD="uv run tools/analyze_apk.py -a workspace/phantomcard/4.2-stg-analysis/apk-all.csv -r workspace/phantomcard/4.1-stg-rule-gen/pack"
+
+# If PATT not shown up in process names, run CMD
+while true; do
+    if ! pgrep -f "$PATT" > /dev/null; then
+        echo "$(date): $CMD not running, starting..."
+        $CMD &
+    fi
+    sleep 60
+done
+
+

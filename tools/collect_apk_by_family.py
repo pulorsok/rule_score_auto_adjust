@@ -46,9 +46,9 @@ def collect_apk_by_family(apk_list: Path, family: str, output_path: Path, virus_
             .alias("threat_labels")
         ).unnest("threat_labels")
 
-    # Replace kungfu with droidkungfu because they are the same family
+    # Replace kungfu with droidkungfu and spymax with spynote because they are the same family
     sha256_with_family = sha256_with_family.with_columns(
-        pl.col("middle_threat_label").str.replace("^kungfu$", "droidkungfu")
+        pl.col("middle_threat_label").str.replace("^kungfu$", "droidkungfu").replace("spymax", "spynote")
     )
 
     # Show the family distribution
