@@ -1,9 +1,9 @@
-Analyzed,Not Yet Analyzed,Sample Num < 10,Unanalyzable:Reason
-Golddream,NGate,DCHSpy,TangleBot:compression method not supported
-DroidKungFu,Hook,RefalRAT,Jocker:hidden library
-SpyNote,Datzbro,NoviSpy,Coper:hidden library
-DawDropper,Antidot,Crocodilus,TrickMo:hidden apk
-Slocker,,888Rat,Vultur:hidden library
-,,Calyrate,GoldDigger:hidden library
-,,,Triada:hidden library
-,,,Ermac:hidden dex
+Analyzed   , Not Yet Analyzed, Sample Num < 10, Analysis Report, Unanalyzable:Reason
+Golddream  , NGate           , DCHSpy         ,                , TangleBot:compression method not supported
+DroidKungFu, Hook            , RefalRAT       , only 1         , Jocker:hidden library
+SpyNote    ,                 , NoviSpy        ,                , Coper:hidden library
+DawDropper , Antidot         , Crocodilus     ,                , TrickMo:hidden apk
+Slocker    , ermac           , 888Rat         ,                , Vultur:hidden library
+           ,                 , Calyrate       ,                , GoldDigger:hidden library
+           ,                 , HookBot        ,                , Triada:hidden library
+           ,                 , Datzbro        ,                , Ermac:hidden dex
