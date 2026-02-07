@@ -37,7 +37,11 @@ with tqdm.tqdm(desc="Getting Threat Label", total=len(dataset)) as progress:
                 .get("suggested_threat_label", "./")
             )
 
-            major, middle, minor = re.split("[./]", threat_label)
+            parts = re.split("[./]", threat_label)
+            major = parts[0] if len(parts) > 0 else ""
+            middle = parts[1] if len(parts) > 1 else ""
+            minor = parts[2] if len(parts) > 2 else ""
+
             return {
                 "major_threat_label": major,
                 "middle_threat_label": middle,

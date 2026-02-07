@@ -34,7 +34,11 @@ def get_threat_labels_from_virus_total(dataset: pl.DataFrame) -> pl.DataFrame:
                 .get("popular_threat_classification", {})
                 .get("suggested_threat_label", "./")
             )
-            major, middle, minor = re.split("[./]", label)
+            parts = re.split("[./]", label)
+            major = parts[0] if len(parts) > 0 else ""
+            middle = parts[1] if len(parts) > 1 else ""
+            minor = parts[2] if len(parts) > 2 else ""
+
             return {
                 "major_threat_label": major,
                 "middle_threat_label": middle,

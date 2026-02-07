@@ -17,7 +17,6 @@ dependencies = [
     "networkx[default]>=3.5",
     "perfect>=0.0.1",
     "polars>=1.30.0",
-    "prefect[ray]>=3.4.6",
     "ray[data,default]>=2.46.0",
     "scikit-learn>=1.6.1",
     "tensorboard>=2.19.0",
@@ -26,7 +25,13 @@ dependencies = [
     "torchvision>=0.22.1",
     "tqdm>=4.67.1",
     "pathvalidate",
+    "pyzipper>=0.3.6",
+    "prefect>=3.6.10",
+    "quark-engine",
 ]
 
 [tool.uv]
 environments = ["sys_platform == 'linux'"]
+
+[tool.uv.sources]
+quark-engine = { path = "../quark-engine" }

@@ -19,32 +19,26 @@ def get_apk_path(row: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
-def analyze_apk(row: Dict[str, Any], rules: list[Path]) -> list[Dict[str, Any]]:
-    results = analysis_result_lib.analyze_rules(
-        row["sha256"], Path(row["apk_path"]), rules, use_cache=False
-    )
+def analyze_apk(row: Dict[str, Any], rules: list[Path], use_cache: bool = True) -> list[Dict[str, Any]]:
+    results = analysis_result_lib.analyze_rules(row["sha256"], Path(row["apk_path"]), rules, use_cache=use_cache)
     print(row["apk_path"])
+
     def get_new_row(row, rule_name: str, confidence: int) -> Dict[str, Any]:
         new_row = row.copy()
         new_row["rule_name"] = rule_name
         new_row["confidence"] = confidence
         return new_row
-    
-    return [
-        get_new_row(row, rule_name, confidence)
-        for rule_name, confidence in results.items()
-    ]
+
+    return [get_new_row(row, rule_name, confidence) for rule_name, confidence in results.items()]
 
 
-def analyze_apks(sha256s: list[str], rules: list[Path], output_csv: Path):
+def analyze_apks(sha256s: list[str], rules: list[Path], output_csv: Path, use_cache: bool = True):
     ray.init(num_cpus=4)
 
     sha256s_pl = pd.DataFrame({"sha256": sha256s})
-    sha256s_pl = sha256s_pl.assign(
-        size=sha256s_pl["sha256"].apply(lambda x: apk_lib._get_path(x).stat().st_size)
-    )
+    sha256s_pl = sha256s_pl.assign(size=sha256s_pl["sha256"].apply(lambda x: apk_lib._get_path(x).stat().st_size))
     sha256s_pl = sha256s_pl.sort_values("size")
-    
+
     # Drop size column as it is not needed anymore
     sha256s_pl = sha256s_pl.drop(columns=["size"])
 
@@ -53,9 +47,9 @@ def analyze_apks(sha256s: list[str], rules: list[Path], output_csv: Path):
 
     dataset = dataset.filter(lambda row: row["apk_path"] is not None)
 
-    partial_analyze_apk = functools.partial(analyze_apk, rules=rules)
+    partial_analyze_apk = functools.partial(analyze_apk, rules=rules, use_cache=use_cache)
     dataset = dataset.flat_map(partial_analyze_apk)
-    
+
     # Write dataset to CSV
     dataset.write_csv(str(output_csv))
 
@@ -99,7 +93,8 @@ def analyze_apks(sha256s: list[str], rules: list[Path], output_csv: Path):
     default=Path("analysis_results"),
     help="Output folder to show analysis results.",
 )
-def analyze_apk_parallelly(apk_list: list[Path], rule_folder: list[Path], output_csv: Path):
+@click.option("--cache/--no-cache", is_flag=True, default=True)
+def analyze_apk_parallelly(apk_list: list[Path], rule_folder: list[Path], output_csv: Path, cache: bool):
     """Analyze APKs from a list using rules from a specified folder.
 
     Example usage:
@@ -120,7 +115,7 @@ def analyze_apk_parallelly(apk_list: list[Path], rule_folder: list[Path], output
     rules = [rule for folder in rule_folder for rule in folder.rglob("*.json") if rule.is_file()]
 
     print(f"Analyzing {len(sha256s)} APKs with {len(rules)} rules")
-    analyze_apks(sha256s, rules, output_csv)
+    analyze_apks(sha256s, rules, output_csv, use_cache=cache)
 
 
 if __name__ == "__main__":

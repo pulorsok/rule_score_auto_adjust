@@ -1,0 +1,43 @@
+// A reference tree for parent functions
+digraph {
+	graph [center=true fillcolor=white fontname="Courier New Bold" fontsize=24 label="" labelloc=top rankdir=LR shape=box style=rounded]
+	node [fontcolor=red fontname="Courier New" fontsize=16 shape=none]
+	edge [label=calls]
+	subgraph cluster_p0 {
+		graph [fontsize=16 label="Lnp/Ī;call"]
+		p0 [label="Query a URI and append the result into a string\lGet absolute path of file and put it to JSON object\lPut data in cursor to JSON object\lRead sensitive data(SMS, CALLLOG) and put it into JSON object\lSave gestures into a list\l"]
+	}
+	subgraph cluster_p79 {
+		graph [fontsize=16 label="Lnp/ࣼ;̔"]
+		p79 [label="Simulate a touch gesture on the device screen\lSimulate user gestures\l"]
+	}
+	subgraph cluster_p81 {
+		graph [fontsize=16 label="Lnp/๧;̍"]
+		p81 [label="Simulate a touch gesture on the device screen\l"]
+	}
+	subgraph cluster_p131 {
+		graph [fontsize=16 label="Lnp/๧;̓"]
+		p131 [label="Save gestures into a list\l"]
+	}
+	subgraph cluster_p132 {
+		graph [fontsize=16 label="Lnp/๧;̐"]
+		p132 [label="Save gestures into a list\l"]
+	}
+	subgraph cluster_p133 {
+		graph [fontsize=16 label="Lnp/๧;̒"]
+		p133 [label="Save gestures into a list\l"]
+	}
+	subgraph cluster_p134 {
+		graph [fontsize=16 label="Lnp/๧;̎"]
+		p134 [label="dispatch gesture from list\l"]
+	}
+	p0 -> p131
+	p0 -> p132
+	p0 -> p133
+	p0 -> p134
+    p131 -> p134
+    p132 -> p134
+    p133 -> p134
+    p0 -> p79
+    p0 -> p81
+}

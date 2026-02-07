@@ -140,9 +140,9 @@ def analyze(
     rule_name = rule_path.name
     if (not use_cache) or rule_name not in subcache:
         existing_result = __load_as_dict(sha256)
-        if rule_name in existing_result:
+        if (use_cache) and rule_name in existing_result:
             # Migrating: Check if result exists in the analysis_result file
-            # print(f"Find analysis result for {sha256} and {rule_name} in analysis_result file")
+            print(f"Find analysis result for {sha256} and {rule_name} in analysis_result file")
             stage = existing_result[rule_name]
             subcache.set(
                 rule_name,

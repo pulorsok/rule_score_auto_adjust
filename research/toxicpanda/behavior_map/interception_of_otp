@@ -1,0 +1,10 @@
+// A reference tree for parent functions
+digraph {
+	graph [center=true fillcolor=white fontname="Courier New Bold" fontsize=24 label="" labelloc=top rankdir=LR shape=box style=rounded]
+	node [fontcolor=red fontname="Courier New" fontsize=16 shape=none]
+	edge [label=calls]
+	subgraph cluster_p28 {
+		graph [fontsize=16 label="Lnp/ࣿ;onReceive"]
+		p28 [label="Read SMS content from PDU\lRead SMS content from Intents\l"]
+	}
+}
