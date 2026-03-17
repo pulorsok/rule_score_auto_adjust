@@ -156,8 +156,11 @@ def analyze(
             # Run Quark Analysis
             # print(f"Run Quark Analysis for {sha256} and {rule_name}")
             try:
+                rule_obj = Rule(str(rule_path))
                 quark = _get_quark(apk_path)
-                stage = quark.run(Rule(str(rule_path)))
+                quark.run(rule_obj)
+                # quark.run() returns None; stage count is in rule_obj.check_item
+                stage = rule_obj.check_item.count(True)  # 0–5
 
                 _append_result(sha256, {rule_name: stage})
                 subcache.set(rule_name, ANALYSIS_STATUS.SUCCESS)
