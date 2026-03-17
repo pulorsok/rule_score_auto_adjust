@@ -66,7 +66,7 @@ class ApkInfo:
 
         if self.path is not None:
             self.analysis_result = analysis_result_lib.analyze_rules(
-                sha256, self.path, rule_paths, dry_run=True
+                sha256, self.path, rule_paths  # dry_run=False: run analysis if not cached
             )
         else:
             self.analysis_result = {}

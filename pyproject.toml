@@ -27,6 +27,11 @@ dependencies = [
     "pathvalidate",
     "pyzipper>=0.3.6",
     "prefect>=3.6.10",
+    "prefect-ray",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "requests>=2.32.0",
+    "python-dotenv>=1.0.0",
     "quark-engine",
 ]
 
