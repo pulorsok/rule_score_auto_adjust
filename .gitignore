@@ -209,4 +209,10 @@ runs
 
 classifications/*
 
-data
+data/
+
+# diskcache runtime artifacts (e.g. None/ created when family=None)
+None/
+*.db
+*.db-shm
+*.db-wal

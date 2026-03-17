@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "platform_machine != 'aarch64' and sys_platform == 'linux'",
@@ -3097,7 +3097,7 @@ wheels = [
 
 [[package]]
 name = "quark-engine"
-version = "26.2.1"
+version = "25.10.1"
 source = { directory = "../quark-engine" }
 dependencies = [
     { name = "androguard", marker = "sys_platform == 'linux'" },

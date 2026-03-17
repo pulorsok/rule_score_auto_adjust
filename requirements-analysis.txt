@@ -1,0 +1,33 @@
+# Analysis environment dependencies
+# Requires Python >= 3.13
+#
+# Step 1: Install quark-engine from local source (must be cloned alongside this repo):
+#   pip install -e ../quark-engine
+#
+# Step 2: Install the remaining dependencies:
+#   pip install -r requirements-analysis.txt
+#
+# Step 3: Set ANALYSIS_PYTHON in Settings → 進階設定 to point to this environment's Python.
+
+altair[all]>=5.5.0
+diskcache>=5.6.3
+python-dotenv>=1.0.0
+jupyter>=1.1.1
+langchain>=0.3.25
+langchain-community>=0.3.25
+langchain-core>=0.3.65
+langchain-openai>=0.3.23
+mlflow>=3.1.0
+networkx[default]>=3.5
+polars>=1.30.0
+ray[data,default]>=2.46.0
+scikit-learn>=1.6.1
+tensorboard>=2.19.0
+torch>=2.7.1
+torchaudio>=2.7.1
+torchvision>=0.22.1
+tqdm>=4.67.1
+pathvalidate
+pyzipper>=0.3.6
+prefect>=3.6.10
+prefect-ray

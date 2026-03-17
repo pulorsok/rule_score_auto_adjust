@@ -1,0 +1,15 @@
+# Web server dependencies
+# Install with: pip install -r web/requirements.txt
+# Then run with: python -m uvicorn web.app:app --reload --port 9527
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+requests>=2.32.0
+python-dotenv>=1.0.0
+
+# NOTE: The analysis scripts (generate_rules.py, adjust_rule_score.py) require
+# a separate Python environment with the full project dependencies:
+#   quark-engine, prefect, prefect-ray, ray, torch, polars, etc.
+# See pyproject.toml for the complete list.
+# After setting up that environment, configure its Python path in:
+#   Settings → 進階設定 → 分析用 Python 路徑

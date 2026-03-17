@@ -1,5 +1,7 @@
 import enum
+import multiprocessing
 import os
+import sys
 from pathlib import Path
 import resource
 from typing import Literal
@@ -16,16 +18,42 @@ import data_preprocess.rule as rule_lib
 
 dotenv.load_dotenv()
 
+# CPU count: read from env, default to half of available CPUs (min 1, max 8)
+_default_cpus = max(1, min(8, multiprocessing.cpu_count() // 2))
+_GENERATE_CPUS = int(os.environ.get("GENERATE_RULES_CPUS", _default_cpus))
+# Memory limit per Ray worker (bytes): read from env, default to 2 GB
+_OBJECT_STORE_MB = int(os.environ.get("GENERATE_RULES_OBJECT_STORE_MB", 2048))
+# macOS: Ray hard-limits object store to 2 GB; cap automatically
+_MACOS_OBJECT_STORE_LIMIT = 2048
+if sys.platform == "darwin" and _OBJECT_STORE_MB > _MACOS_OBJECT_STORE_LIMIT:
+    print(f"[generate_rules] macOS: object store capped {_OBJECT_STORE_MB} → {_MACOS_OBJECT_STORE_LIMIT} MB")
+    _OBJECT_STORE_MB = _MACOS_OBJECT_STORE_LIMIT
+# Max APIs per pool (0 = no limit); limits N×N combinations for testing
+_MAX_APIS = int(os.environ.get("GENERATE_RULES_MAX_APIS", 0))
+print(f"[generate_rules] Using {_GENERATE_CPUS} CPUs, {_OBJECT_STORE_MB} MB object store, max_apis={_MAX_APIS or 'unlimited'}")
+
 
 class GENERATE_STATUS(enum.Enum):
     SUCCESS = "success"
     FAILED = "failed"
     NOT_TRIED = "not_tried"
 
+
+class _LimitedRuleGeneration(RuleGeneration):
+    """RuleGeneration subclass that truncates API pools for faster testing."""
+    def __init__(self, apk, output_dir, max_apis: int = 0):
+        super().__init__(apk, output_dir)
+        if max_apis > 0:
+            self.first_api_set = set(list(self.first_api_set)[:max_apis])
+            self.second_api_set = set(list(self.second_api_set)[:max_apis])
+            print(f"[generate_rules] API pool limited to {max_apis} (was larger)")
+
+
 @task(log_prints=True)
 def generate_rules_for_apk(apk_path: str, output_folder: str) -> Literal[GENERATE_STATUS.SUCCESS, GENERATE_STATUS.FAILED]:
     try:
-        RuleGeneration(apk_path, output_folder).generate_rule()
+        max_apis = int(os.environ.get("GENERATE_RULES_MAX_APIS", 0))
+        _LimitedRuleGeneration(apk_path, output_folder, max_apis=max_apis).generate_rule()
         print(f"Rules generated and saved to {output_folder}")
         return GENERATE_STATUS.SUCCESS
 
@@ -63,7 +91,12 @@ def create_rule_links(target_folder: Path, source_folder: Path) -> None:
     print(f"Linking completed. Rules linked to {target_folder.resolve()}")
     
 
-@flow(name="generate_rules_from_apk_list", task_runner=RayTaskRunner(init_kwargs={"num_cpus": 4}), log_prints=True)  # type: ignore
+@flow(name="generate_rules_from_apk_list",
+      task_runner=RayTaskRunner(init_kwargs={
+          "num_cpus": _GENERATE_CPUS,
+          "object_store_memory": _OBJECT_STORE_MB * 1024 * 1024,
+      }),
+      log_prints=True)  # type: ignore
 def generate_rules_for_apk_list(apk_lists: list[Path], output_folder: Path, rerun_failed: bool = False):
     cache = diskcache.FanoutCache(f"{output_folder}/rule_generation_cache")
 
@@ -93,7 +126,7 @@ def generate_rules_for_apk_list(apk_lists: list[Path], output_folder: Path, reru
             continue
 
         if row["sha256"] not in cache or (rerun_failed and cache.get(row["sha256"]) == GENERATE_STATUS.FAILED):
-            os.mkdir(row["rule_output_folder"])
+            os.makedirs(row["rule_output_folder"], exist_ok=True)
 
             print(f"Generating rules for {row['sha256']} at {row['rule_output_folder']}")
             future = generate_rules_for_apk.submit(row["apk_path"], row["rule_output_folder"])
@@ -102,14 +135,22 @@ def generate_rules_for_apk_list(apk_lists: list[Path], output_folder: Path, reru
         else:
             print(f"Rules for {row['sha256']} already generated with status: {cache.get(row['sha256'])}. Skipping.")
 
+    total_futures = len(futures)
+    print(f"PROGRESS:0/{total_futures}")  # machine-readable progress marker
     # Wait for all tasks to complete and collect results
-    for sha256, future in tqdm(futures, desc="Generating rules"):
-        status = future.result()
+    for i, (sha256, future) in enumerate(tqdm(futures, desc="Generating rules"), start=1):
+        try:
+            status = future.result()
+        except Exception as e:
+            # Ray WorkerCrashedError (OOM, SIGSEGV, etc.) — treat as failed and continue
+            print(f"Worker crashed for {sha256}: {type(e).__name__}: {e}")
+            status = GENERATE_STATUS.FAILED
         cache.set(sha256, status)
         if status == GENERATE_STATUS.SUCCESS:
             print(f"Successfully generated rules for {sha256}")
         else:
             print(f"Failed to generate rules for {sha256}")
+        print(f"PROGRESS:{i}/{total_futures}")  # machine-readable progress marker
 
     print(f"Rule generation completed. Output folder: {output_folder.resolve()}")
 
@@ -166,5 +207,8 @@ def generate_and_collect_rules(apk_list: list[Path], working_folder: Path, outpu
 
 if __name__ == "__main__":
     mem_bytes = 22 * 1024 * 1024 * 1024  # 20 GB
-    resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+    except (ValueError, resource.error):
+        pass  # macOS does not support RLIMIT_AS; safe to skip
     generate_and_collect_rules()

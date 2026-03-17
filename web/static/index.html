@@ -1,0 +1,1606 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rule Score Auto Adjust</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2e3247;
+      --accent: #4f8ef7;
+      --accent2: #7c5cbf;
+      --success: #3dba7e;
+      --warn: #e8a730;
+      --danger: #e05252;
+      --text: #e0e4f0;
+      --text2: #8b92a8;
+      --font: 'Inter', 'Segoe UI', sans-serif;
+      --mono: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+
+    /* Layout */
+    .layout { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+    nav { background: var(--surface); border-right: 1px solid var(--border); padding: 20px 0; display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; height: 100vh; }
+    nav .logo { padding: 0 20px 20px; font-size: 15px; font-weight: 700; color: var(--accent); border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+    nav .logo span { display: block; font-size: 11px; color: var(--text2); font-weight: 400; margin-top: 2px; }
+    nav a { display: flex; align-items: center; gap: 10px; padding: 10px 20px; color: var(--text2); text-decoration: none; border-radius: 0; transition: background .15s, color .15s; font-size: 13px; cursor: pointer; }
+    nav a:hover, nav a.active { background: var(--surface2); color: var(--text); }
+    nav a .icon { font-size: 16px; width: 20px; text-align: center; }
+    .main { padding: 32px; max-width: 1100px; }
+
+    /* Page sections */
+    .page { display: none; }
+    .page.active { display: block; }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    .subtitle { color: var(--text2); font-size: 13px; margin-bottom: 28px; }
+
+    /* Cards */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+    .card-title { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 14px; }
+
+    /* Form elements */
+    .form-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
+    .field { display: flex; flex-direction: column; gap: 5px; }
+    .field label { font-size: 12px; color: var(--text2); }
+    input, select, textarea {
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+      border-radius: 6px; padding: 8px 12px; font-size: 13px; font-family: var(--font); outline: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    input[type="number"] { width: 90px; }
+    .input-wide { width: 260px; }
+    .input-sm { width: 120px; }
+    textarea { resize: vertical; width: 100%; min-height: 70px; font-family: var(--mono); font-size: 12px; }
+
+    /* Buttons */
+    btn, .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; transition: opacity .15s; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn:hover { opacity: .85; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* Status badges */
+    .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+    .badge-blue { background: rgba(79,142,247,.15); color: var(--accent); }
+    .badge-green { background: rgba(61,186,126,.15); color: var(--success); }
+    .badge-yellow { background: rgba(232,167,48,.15); color: var(--warn); }
+    .badge-red { background: rgba(224,82,82,.15); color: var(--danger); }
+    .badge-gray { background: rgba(139,146,168,.1); color: var(--text2); }
+
+    /* Table */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 8px 12px; color: var(--text2); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; border-bottom: 1px solid var(--border); }
+    td { padding: 9px 12px; border-bottom: 1px solid rgba(46,50,71,.5); vertical-align: top; }
+    tr:hover td { background: var(--surface2); }
+    .mono { font-family: var(--mono); font-size: 12px; color: var(--text2); }
+    .sha-cell { font-family: var(--mono); font-size: 11px; color: var(--text2); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* Log viewer */
+    .log-box { background: #0a0c12; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; font-family: var(--mono); font-size: 12px; color: #c8d0e8; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+    .log-empty { color: var(--text2); font-style: italic; }
+
+    /* Config indicators */
+    .config-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+    .config-item { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: var(--surface2); border-radius: 8px; }
+    .config-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot-green { background: var(--success); }
+    .dot-red { background: var(--danger); }
+    .config-key { font-size: 12px; font-weight: 600; }
+    .config-val { font-size: 11px; color: var(--text2); font-family: var(--mono); }
+
+    /* Pipeline jobs */
+    .job-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 10px; }
+    .job-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+    .job-id { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+    .job-cmd { font-family: var(--mono); font-size: 11px; color: var(--text2); margin-bottom: 8px; word-break: break-all; }
+
+    /* Spinner */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; vertical-align: middle; }
+
+    /* Directory picker modal */
+    .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1000; align-items:center; justify-content:center; }
+    .modal-overlay.open { display:flex; }
+    .modal { background:var(--surface); border:1px solid var(--border); border-radius:12px; width:580px; max-height:80vh; display:flex; flex-direction:column; overflow:hidden; }
+    .modal-header { padding:16px 20px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+    .modal-header h3 { font-size:15px; font-weight:700; }
+    .modal-close { background:none; border:none; color:var(--text2); font-size:20px; cursor:pointer; line-height:1; padding:0 4px; }
+    .modal-close:hover { color:var(--text); }
+    .modal-breadcrumb { padding:10px 20px; background:var(--surface2); display:flex; align-items:center; gap:4px; flex-wrap:wrap; font-size:12px; font-family:var(--mono); border-bottom:1px solid var(--border); }
+    .breadcrumb-item { color:var(--accent); cursor:pointer; }
+    .breadcrumb-item:hover { text-decoration:underline; }
+    .breadcrumb-sep { color:var(--text2); }
+    .modal-body { flex:1; overflow-y:auto; padding:8px 0; }
+    .dir-entry { display:flex; align-items:center; gap:10px; padding:8px 20px; cursor:pointer; transition:background .1s; }
+    .dir-entry:hover { background:var(--surface2); }
+    .dir-entry .entry-icon { font-size:16px; width:20px; text-align:center; flex-shrink:0; }
+    .dir-entry .entry-name { font-size:13px; font-family:var(--mono); }
+    .dir-entry .entry-name.is-file { color:var(--text2); }
+    .modal-footer { padding:14px 20px; border-top:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+    .modal-current-path { flex:1; font-family:var(--mono); font-size:12px; color:var(--text2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+    /* Auto Pipeline cards */
+    .ap-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+    .ap-card-header { padding:14px 16px 10px; display:flex; justify-content:space-between; align-items:flex-start; }
+    .ap-family-name { font-weight:700; font-size:15px; font-family:var(--mono); }
+    .ap-card-body { padding:0 16px 14px; }
+    .ap-counts { display:flex; gap:14px; margin-bottom:10px; font-size:12px; color:var(--text2); }
+    .ap-counts span b { color:var(--text); }
+    .ap-actions { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+    .ap-log-box { background:#0a0c12; border:1px solid var(--border); border-radius:6px; padding:10px 12px;
+      font-family:var(--mono); font-size:11px; color:#c8d0e8; max-height:200px; overflow-y:auto;
+      white-space:pre-wrap; word-break:break-all; margin-top:8px; }
+    .ap-stat-chip { background:var(--surface); border:1px solid var(--border); border-radius:8px;
+      padding:8px 14px; font-size:12px; display:flex; flex-direction:column; gap:2px; }
+    .ap-stat-chip .n { font-size:20px; font-weight:700; }
+    .ap-pr-row { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+
+    /* Stage stepper */
+    .ap-stepper { display:flex; align-items:stretch; padding:10px 16px; background:var(--surface2); border-bottom:1px solid var(--border); gap:0; overflow:hidden; }
+    .ap-stage { display:flex; flex-direction:column; align-items:center; flex:1; position:relative; gap:4px; }
+    .ap-stage:not(:last-child)::after { content:''; position:absolute; top:10px; left:calc(50% + 12px); right:calc(-50% + 12px); height:2px; background:var(--border); z-index:0; }
+    .ap-stage.done::after { background:var(--success); }
+    .ap-stage.active::after { background:var(--accent); }
+    .ap-stage-dot { width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:11px; border:2px solid var(--border); background:var(--surface); position:relative; z-index:1; flex-shrink:0; }
+    .ap-stage.done .ap-stage-dot { background:var(--success); border-color:var(--success); color:#fff; }
+    .ap-stage.active .ap-stage-dot { background:var(--accent); border-color:var(--accent); color:#fff; }
+    .ap-stage.failed .ap-stage-dot { background:var(--danger); border-color:var(--danger); color:#fff; }
+    .ap-stage.pending .ap-stage-dot { background:var(--surface2); border-color:var(--border); color:var(--text2); }
+    .ap-stage-label { font-size:10px; color:var(--text2); text-align:center; white-space:nowrap; }
+    .ap-stage.done .ap-stage-label { color:var(--success); }
+    .ap-stage.active .ap-stage-label { color:var(--accent); font-weight:600; }
+    .ap-stage.failed .ap-stage-label { color:var(--danger); }
+    .ap-stage-restart { font-size:9px; color:var(--text2); cursor:pointer; background:none; border:none; padding:0; opacity:0.6; line-height:1; }
+    .ap-stage-restart:hover { opacity:1; color:var(--accent); }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { display:inline-block; width:14px; height:14px; border:2px solid rgba(79,142,247,.3); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; vertical-align:middle; }
+    /* Progress bar inside stepper active stage */
+    .ap-stage-progress { width:90%; height:3px; background:rgba(79,142,247,.2); border-radius:2px; overflow:hidden; margin-top:1px; }
+    .ap-stage-progress-fill { height:100%; background:var(--accent); transition:width .4s; }
+
+    /* Misc */
+    .empty-state { text-align: center; padding: 40px; color: var(--text2); }
+    .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+    .flex-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .text-sm { font-size: 12px; color: var(--text2); }
+    .family-tag { background: rgba(79,142,247,.12); color: var(--accent); padding: 2px 8px; border-radius: 4px; font-size: 12px; font-family: var(--mono); }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <!-- Navigation -->
+  <nav>
+    <div class="logo">
+      Rule Score
+      <span>Auto Adjust</span>
+    </div>
+    <a class="active" onclick="showPage('auto-pipeline')" id="nav-auto-pipeline">
+      <span class="icon">🚀</span> Auto Pipeline
+    </a>
+    <a onclick="showPage('tools')" id="nav-tools">
+      <span class="icon">🔧</span> Tools
+    </a>
+    <a onclick="showPage('jobs')" id="nav-jobs">
+      <span class="icon">📋</span> Jobs
+    </a>
+    <a onclick="showPage('settings')" id="nav-settings" style="margin-top:auto;">
+      <span class="icon">🔑</span> Settings
+    </a>
+  </nav>
+
+  <!-- Main content -->
+  <div class="main">
+
+    <!-- ── Tools ── -->
+    <div class="page" id="page-tools">
+      <h1>Tools</h1>
+      <div class="subtitle">MalwareBazaar / AndroZoo 查詢工具，以及各階段功能單獨測試</div>
+
+      <!-- MalwareBazaar -->
+      <div class="card">
+        <div class="card-title">🔍 MalwareBazaar 搜尋</div>
+        <div class="form-row">
+          <div class="field">
+            <label>家族名稱 (signature)</label>
+            <input class="input-wide" id="baz-sig" placeholder="例: Toxicpanda、Antidot" onkeydown="if(event.key==='Enter')searchBazaar()" />
+          </div>
+          <div class="field">
+            <label>最大筆數</label>
+            <input type="number" id="baz-limit" value="50" min="1" max="1000" />
+          </div>
+          <div class="field" style="justify-content:flex-end;">
+            <button class="btn btn-primary" onclick="searchBazaar()">🔍 搜尋</button>
+          </div>
+        </div>
+        <div id="baz-status" class="text-sm" style="margin-top:4px;"></div>
+        <div id="baz-result-card" style="display:none;margin-top:14px;">
+          <div class="flex-row" style="margin-bottom:10px;">
+            <span id="baz-result-title" class="text-sm" style="font-weight:600;"></span>
+            <button class="btn btn-secondary" id="baz-copy-btn" onclick="copySha256List()" style="display:none;">📋 複製 SHA256 清單</button>
+            <button class="btn btn-success" id="baz-export-btn" onclick="exportToCsv()" style="display:none;">💾 匯出 CSV</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th><input type="checkbox" id="baz-check-all" onchange="toggleAll(this)" /></th>
+                  <th>SHA256</th>
+                  <th>檔案名稱</th>
+                  <th>大小</th>
+                  <th>首次發現</th>
+                  <th>Tags</th>
+                </tr>
+              </thead>
+              <tbody id="baz-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
+          <div class="text-sm" style="font-weight:600;margin-bottom:8px;">近期新增樣本（家族分佈）</div>
+          <button class="btn btn-secondary" onclick="loadRecent()">🔄 載入最近 100 筆 APK</button>
+          <div id="recent-status" class="text-sm" style="margin-top:6px;margin-bottom:8px;"></div>
+          <div id="recent-families"></div>
+        </div>
+      </div>
+
+      <!-- AndroZoo -->
+      <div class="card">
+        <div class="card-title">📦 AndroZoo 查詢</div>
+        <div class="form-row" style="align-items:flex-end;">
+          <div class="field" style="flex:1;">
+            <label>SHA256（單筆）</label>
+            <input id="az-sha256" placeholder="輸入 64 位 SHA256 hash" style="width:100%;" />
+          </div>
+          <div class="field" style="justify-content:flex-end;">
+            <button class="btn btn-primary" onclick="checkAndrozoo()">🔎 查詢</button>
+          </div>
+        </div>
+        <div id="az-result" class="text-sm" style="margin-top:8px;"></div>
+        <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
+          <div class="text-sm" style="font-weight:600;margin-bottom:8px;">批次查詢</div>
+          <div class="field" style="margin-bottom:10px;">
+            <label>SHA256 清單（每行一個）</label>
+            <textarea id="az-batch-list" placeholder="abc123...\ndef456...\n..."></textarea>
+          </div>
+          <button class="btn btn-primary" onclick="batchCheckAndrozoo()">🔎 批次查詢</button>
+          <div id="az-batch-result" style="margin-top:14px;"></div>
+        </div>
+      </div>
+
+      <!-- Function Testing -->
+      <div class="card">
+        <div class="card-title">🧪 功能測試</div>
+        <div class="text-sm" style="color:var(--text2);margin-bottom:16px;">直接呼叫各階段腳本，可獨立測試每個步驟，執行結果可至 Jobs 頁面查看 Log。</div>
+
+        <!-- Generate Rules -->
+        <div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
+          <div style="font-weight:600;margin-bottom:10px;color:var(--accent);">① 生成規則（generate_rules.py）</div>
+          <div class="field" style="margin-bottom:10px;">
+            <label>APK 清單路徑（每行一個）</label>
+            <textarea id="gen-apk-lists" placeholder="data/lists/family/toxicpanda.csv" style="min-height:55px;"></textarea>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>工作資料夾</label>
+              <input class="input-wide" id="gen-working" value="data/generated_rules" />
+            </div>
+            <div class="field">
+              <label>輸出資料夾</label>
+              <input class="input-wide" id="gen-output" value="data/rules" />
+            </div>
+            <div class="field" style="justify-content:flex-end;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="checkbox" id="gen-rerun" />
+                重新執行失敗項目
+              </label>
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="startGenerateRules()">▶ 生成規則</button>
+          <div id="gen-result" class="text-sm" style="margin-top:8px;"></div>
+        </div>
+
+        <!-- Train / Adjust Weights -->
+        <div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
+          <div style="font-weight:600;margin-bottom:10px;color:var(--accent);">② 調整權重（adjust_rule_score.py）</div>
+          <div class="form-row">
+            <div class="field">
+              <label>目標家族名稱</label>
+              <input class="input-wide" id="train-family" placeholder="例: toxicpanda" />
+            </div>
+            <div class="field">
+              <label>Learning Rates</label>
+              <input class="input-sm" id="train-lrs" value="0.1,0.05" />
+            </div>
+            <div class="field">
+              <label>Epochs</label>
+              <input type="number" id="train-epochs" value="100" />
+            </div>
+          </div>
+          <div class="field" style="margin-bottom:10px;">
+            <label>APK 清單路徑（每行一個）</label>
+            <textarea id="train-apk-lists" placeholder="data/lists/family/toxicpanda.csv&#10;data/lists/benignAPKs_top_0.4_vt_scan_date.csv" style="min-height:60px;"></textarea>
+          </div>
+          <div class="field" style="margin-bottom:10px;">
+            <label>規則資料夾路徑（每行一個）</label>
+            <textarea id="train-rule-folders" placeholder="data/rules" style="min-height:50px;"></textarea>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>輸出 CSV</label>
+              <input class="input-wide" id="train-output-csv" value="apk_prediction.csv" />
+            </div>
+            <div class="field">
+              <label>繼續 Run ID（選填）</label>
+              <input class="input-wide" id="train-run-id" placeholder="MLflow run ID" />
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="startTraining()">▶ 啟動訓練</button>
+          <div id="train-result" class="text-sm" style="margin-top:8px;"></div>
+        </div>
+
+        <!-- Collect APK by Family -->
+        <div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
+          <div style="font-weight:600;margin-bottom:10px;color:var(--accent);">③ 依家族分類 APK（VirusTotal）</div>
+          <div class="form-row">
+            <div class="field">
+              <label>輸入 APK 清單</label>
+              <input class="input-wide" id="col-apklist" placeholder="data/lists/maliciousAPKs_test.csv" />
+            </div>
+            <div class="field">
+              <label>目標家族</label>
+              <input class="input-sm" id="col-family" placeholder="toxicpanda" />
+            </div>
+            <div class="field">
+              <label>輸出路徑</label>
+              <input class="input-wide" id="col-output" placeholder="data/lists/family/toxicpanda.csv" />
+            </div>
+            <div class="field" style="justify-content:flex-end;">
+              <button class="btn btn-primary" onclick="startCollect()">▶ 執行</button>
+            </div>
+          </div>
+          <div id="col-result" class="text-sm" style="margin-top:8px;"></div>
+        </div>
+
+        <!-- Apply Rule Info -->
+        <div style="border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="font-weight:600;margin-bottom:10px;color:var(--accent);">④ 套用規則分數與描述</div>
+          <div class="form-row">
+            <div class="field">
+              <label>APK 預測 CSV</label>
+              <input class="input-wide" id="apply-pred" placeholder="apk_prediction.csv" />
+            </div>
+            <div class="field">
+              <label>規則資訊 CSV</label>
+              <input class="input-wide" id="apply-info" placeholder="rule_reviews.csv" />
+            </div>
+            <div class="field">
+              <label>規則根目錄</label>
+              <input class="input-wide" id="apply-base" placeholder="data/generated_rules" />
+            </div>
+          </div>
+          <div class="flex-row">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" id="apply-revert" />
+              反轉分數符號
+            </label>
+            <button class="btn btn-primary" onclick="startApplyRuleInfo()">▶ 套用</button>
+          </div>
+          <div id="apply-result" class="text-sm" style="margin-top:8px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Auto Pipeline ── -->
+    <div class="page active" id="page-auto-pipeline">
+      <h1>Auto Pipeline</h1>
+      <div class="subtitle">輸入惡意程式家族名稱，系統自動完成樣本蒐集、規則生成與權重調整</div>
+
+      <!-- Python env banner -->
+      <div id="ap-python-banner" style="display:none;"></div>
+
+      <!-- Input -->
+      <div class="card">
+        <div class="card-title">新增家族</div>
+        <div class="form-row" style="align-items:flex-start;">
+          <div class="field" style="flex:1;">
+            <label>家族名稱（可多行，每行一個；或貼上 CSV 內容，系統自動解析 family 欄位）</label>
+            <textarea id="ap-family-input" style="min-height:70px;" placeholder="toxicpanda&#10;antidot&#10;godfather"></textarea>
+          </div>
+          <div class="field" style="justify-content:flex-end;padding-top:22px;">
+            <button class="btn btn-primary" onclick="apAddFamilies()">➕ 加入</button>
+          </div>
+        </div>
+        <div id="ap-add-result" class="text-sm" style="margin-top:4px;"></div>
+      </div>
+
+      <!-- Stats bar -->
+      <div id="ap-stats" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;"></div>
+
+      <!-- Queue panel -->
+      <div class="card" id="ap-queue-card" style="display:none;">
+        <div class="card-title">分析佇列</div>
+        <div class="text-sm" style="margin-bottom:10px;color:var(--warn);">
+          ⚠ 每個家族必須等上一個 PR merge 後，才會開始分析。
+        </div>
+        <div id="ap-queue-list"></div>
+      </div>
+
+      <!-- Family cards -->
+      <div id="ap-families-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;margin-top:4px;">
+        <div class="empty-state" id="ap-empty" style="grid-column:1/-1;">尚無家族資料</div>
+      </div>
+    </div>
+
+    <!-- ── Settings ── -->
+    <div class="page" id="page-settings">
+      <h1>Settings</h1>
+      <div class="subtitle">管理 API 金鑰與路徑設定，儲存後寫入 .env 檔案</div>
+
+      <div class="card">
+        <div class="card-title">🔑 API 金鑰</div>
+        <div class="text-sm" style="margin-bottom:16px;color:var(--warn);">
+          ⚠️ 已儲存的金鑰以遮蔽方式顯示。若留白不填，原有值不會被覆蓋。
+        </div>
+
+        <div id="settings-api-fields">
+          <div class="text-sm">載入中…</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📁 路徑設定</div>
+        <div id="settings-path-fields"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">⚙️ 進階設定</div>
+        <div class="text-sm" style="margin-bottom:16px;color:var(--text2);">
+          分析腳本（generate_rules.py、adjust_rule_score.py）需要完整的專案 Python 環境（含 quark-engine、prefect、ray）。<br>
+          若網頁伺服器的 Python 缺少這些套件，請在下方指定完整環境的 Python 執行檔路徑。<br>
+          <span style="color:var(--warn);">若留空，會自動嘗試 <code>uv run</code>（若有安裝），否則使用目前 Python。</span>
+        </div>
+        <div id="settings-advanced-fields"></div>
+      </div>
+
+      <div class="flex-row" style="margin-top:4px;">
+        <button class="btn btn-primary" onclick="saveSettings()">💾 儲存到 .env</button>
+        <span id="settings-save-result" class="text-sm"></span>
+      </div>
+    </div>
+
+    <!-- ── Jobs ── -->
+    <div class="page" id="page-jobs">
+      <h1>執行紀錄</h1>
+      <div class="subtitle">所有 Pipeline 任務的狀態與 Log</div>
+
+      <div class="flex-row" style="margin-bottom:16px;">
+        <button class="btn btn-secondary" onclick="loadJobs()">🔄 重新整理</button>
+        <span class="text-sm" id="jobs-updated"></span>
+      </div>
+
+      <div id="jobs-list">
+        <div class="empty-state">尚無任務紀錄</div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /layout -->
+
+<!-- ── Directory Picker Modal ── -->
+<div class="modal-overlay" id="dir-modal" onclick="closeDirModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3>選擇資料夾</h3>
+      <button class="modal-close" onclick="closeDirModal()">×</button>
+    </div>
+    <div class="modal-breadcrumb" id="dir-breadcrumb"></div>
+    <div class="modal-body" id="dir-body">
+      <div class="empty-state">載入中…</div>
+    </div>
+    <div class="modal-footer">
+      <div class="modal-current-path" id="dir-selected-path">尚未選擇</div>
+      <button class="btn btn-secondary" onclick="closeDirModal()">取消</button>
+      <button class="btn btn-primary" onclick="confirmDirSelection()">✓ 選擇此資料夾</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Navigation ──
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  document.getElementById('nav-' + name).classList.add('active');
+  if (name === 'jobs') loadJobs();
+  if (name === 'settings') loadSettings();
+  if (name === 'auto-pipeline') { _apPythonChecked = false; apLoad(); }
+}
+
+// ── Config ──
+async function loadConfig() {
+  const grid = document.getElementById('config-grid');
+  try {
+    const res = await fetch('/api/config/check');
+    const data = await res.json();
+    grid.innerHTML = Object.entries(data).map(([k, v]) => {
+      const isKey = typeof v === 'boolean';
+      const ok = isKey ? v : !!v;
+      const display = isKey ? (v ? '已設定 ✓' : '未設定') : (v || '（未設定）');
+      return `<div class="config-item">
+        <div class="config-dot ${ok ? 'dot-green' : 'dot-red'}"></div>
+        <div>
+          <div class="config-key">${k}</div>
+          <div class="config-val">${display}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    grid.innerHTML = `<div class="text-sm" style="color:var(--danger)">無法連接後端：${e.message}</div>`;
+  }
+}
+
+// ── MalwareBazaar ──
+let bazaarData = [];
+
+async function searchBazaar() {
+  const sig = document.getElementById('baz-sig').value.trim();
+  const limit = document.getElementById('baz-limit').value;
+  if (!sig) return;
+
+  const status = document.getElementById('baz-status');
+  status.innerHTML = '<span class="spinner"></span> 搜尋中…';
+  document.getElementById('baz-result-card').style.display = 'none';
+
+  try {
+    const res = await fetch(`/api/malwarebazaar/search?signature=${encodeURIComponent(sig)}&limit=${limit}`);
+    const data = await res.json();
+
+    if (data.query_status !== 'ok' || data.total === 0) {
+      status.textContent = `查無結果（${data.query_status}）`;
+      return;
+    }
+
+    bazaarData = data.data;
+    status.textContent = '';
+    renderBazaarTable(data);
+  } catch(e) {
+    status.innerHTML = `<span style="color:var(--danger)">錯誤：${e.message}</span>`;
+  }
+}
+
+function renderBazaarTable(data) {
+  const card = document.getElementById('baz-result-card');
+  const title = document.getElementById('baz-result-title');
+  const tbody = document.getElementById('baz-tbody');
+
+  title.textContent = `搜尋結果：${data.signature}（${data.total} 個 APK 樣本）`;
+  card.style.display = 'block';
+  document.getElementById('baz-copy-btn').style.display = 'inline-flex';
+  document.getElementById('baz-export-btn').style.display = 'inline-flex';
+
+  tbody.innerHTML = data.data.map((s, i) => `
+    <tr>
+      <td><input type="checkbox" class="baz-check" value="${s.sha256}" checked /></td>
+      <td class="sha-cell" title="${s.sha256}">${s.sha256}</td>
+      <td>${s.file_name || '—'}</td>
+      <td class="mono">${s.file_size ? (s.file_size / 1024).toFixed(0) + ' KB' : '—'}</td>
+      <td class="mono">${s.first_seen || '—'}</td>
+      <td>${(s.tags || []).map(t => `<span class="badge badge-blue">${t}</span>`).join(' ')}</td>
+    </tr>
+  `).join('');
+}
+
+function toggleAll(cb) {
+  document.querySelectorAll('.baz-check').forEach(c => c.checked = cb.checked);
+}
+
+function getCheckedSha256() {
+  return [...document.querySelectorAll('.baz-check:checked')].map(c => c.value);
+}
+
+function copySha256List() {
+  const list = getCheckedSha256().join('\n');
+  navigator.clipboard.writeText(list);
+  const btn = document.getElementById('baz-copy-btn');
+  btn.textContent = '✓ 已複製';
+  setTimeout(() => btn.innerHTML = '📋 複製 SHA256 清單', 1500);
+}
+
+function exportToCsv() {
+  const checked = getCheckedSha256();
+  const rows = bazaarData.filter(s => checked.includes(s.sha256));
+  const header = 'sha256,file_name,file_size,first_seen,is_malicious';
+  const lines = rows.map(s => `${s.sha256},${s.file_name || ''},${s.file_size || ''},${s.first_seen || ''},1`);
+  const blob = new Blob([header + '\n' + lines.join('\n')], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `bazaar_${document.getElementById('baz-sig').value}.csv`; a.click();
+}
+
+async function loadRecent() {
+  const status = document.getElementById('recent-status');
+  status.innerHTML = '<span class="spinner"></span> 載入中…';
+  const container = document.getElementById('recent-families');
+  container.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/malwarebazaar/recent');
+    const data = await res.json();
+
+    status.textContent = `共 ${data.apk_count} 個 APK，${data.families.length} 個家族`;
+    container.innerHTML = data.families.map(([fam, cnt]) =>
+      `<span class="family-tag" style="margin:3px;display:inline-block;cursor:pointer;"
+        onclick="document.getElementById('baz-sig').value='${fam}';showPage('bazaar');searchBazaar()">
+        ${fam} <span style="color:var(--text2);">(${cnt})</span>
+      </span>`
+    ).join('');
+  } catch(e) {
+    status.innerHTML = `<span style="color:var(--danger)">錯誤：${e.message}</span>`;
+  }
+}
+
+// ── AndroZoo ──
+async function checkAndrozoo() {
+  const sha256 = document.getElementById('az-sha256').value.trim();
+  if (!sha256) return;
+  const result = document.getElementById('az-result');
+  result.innerHTML = '<span class="spinner"></span> 查詢中…';
+
+  try {
+    const res = await fetch(`/api/androzoo/check/${sha256}`);
+    const data = await res.json();
+    if (data.exists) {
+      result.innerHTML = `<span class="badge badge-green">✓ 存在</span> SHA256: <span class="mono">${sha256}</span>`;
+    } else {
+      result.innerHTML = `<span class="badge badge-red">✗ 不存在</span> status: ${data.status_code}`;
+    }
+  } catch(e) {
+    result.innerHTML = `<span style="color:var(--danger)">錯誤：${e.message}</span>`;
+  }
+}
+
+async function batchCheckAndrozoo() {
+  const lines = document.getElementById('az-batch-list').value.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return;
+  const container = document.getElementById('az-batch-result');
+  container.innerHTML = `<span class="spinner"></span> 查詢 ${lines.length} 筆…`;
+
+  const results = [];
+  for (const sha256 of lines) {
+    try {
+      const res = await fetch(`/api/androzoo/check/${sha256}`);
+      const data = await res.json();
+      results.push({ sha256, exists: data.exists, status: data.status_code });
+    } catch {
+      results.push({ sha256, exists: false, status: 'error' });
+    }
+  }
+
+  const found = results.filter(r => r.exists).length;
+  container.innerHTML = `
+    <div class="text-sm" style="margin-bottom:10px;">共 ${lines.length} 筆，
+      <span style="color:var(--success);">${found} 筆存在</span>，
+      <span style="color:var(--danger);">${lines.length - found} 筆不存在</span>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>SHA256</th><th>狀態</th></tr></thead>
+      <tbody>${results.map(r => `
+        <tr>
+          <td class="sha-cell">${r.sha256}</td>
+          <td><span class="badge ${r.exists ? 'badge-green' : 'badge-red'}">${r.exists ? '存在' : '不存在'}</span></td>
+        </tr>`).join('')}
+      </tbody>
+    </table></div>`;
+}
+
+// ── Pipeline ──
+async function startTraining() {
+  const family = document.getElementById('train-family').value.trim();
+  const lrs = document.getElementById('train-lrs').value.trim();
+  const epochs = parseInt(document.getElementById('train-epochs').value);
+  const apkLists = document.getElementById('train-apk-lists').value.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  const ruleFolders = document.getElementById('train-rule-folders').value.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  const outputCsv = document.getElementById('train-output-csv').value.trim();
+  const runId = document.getElementById('train-run-id').value.trim() || null;
+
+  if (!family || !apkLists.length || !ruleFolders.length) {
+    document.getElementById('train-result').innerHTML = '<span style="color:var(--danger)">請填寫家族名稱、APK 清單與規則資料夾</span>';
+    return;
+  }
+
+  const result = document.getElementById('train-result');
+  result.innerHTML = '<span class="spinner"></span> 啟動中…';
+
+  try {
+    const res = await fetch('/api/pipeline/train', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_family: family, lrs, epochs, apk_lists: apkLists, rule_folders: ruleFolders, output_csv: outputCsv, run_id: runId }),
+    });
+    const data = await res.json();
+    result.innerHTML = `<span class="badge badge-green">已啟動</span> Job ID: <span class="mono">${data.job_id}</span>
+      <button class="btn btn-secondary" style="margin-left:8px;padding:4px 10px;font-size:12px;" onclick="showPage('jobs');loadJobs()">查看 Log</button>`;
+  } catch(e) {
+    result.innerHTML = `<span style="color:var(--danger)">錯誤：${e.message}</span>`;
+  }
+}
+
+async function startGenerateRules() {
+  const apkLists = document.getElementById('gen-apk-lists').value.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  const workingFolder = document.getElementById('gen-working').value.trim();
+  const outputFolder = document.getElementById('gen-output').value.trim();
+  const rerunFailed = document.getElementById('gen-rerun').checked;
+
+  const result = document.getElementById('gen-result');
+  result.innerHTML = '<span class="spinner"></span> 啟動中…';
+
+  try {
+    const res = await fetch('/api/pipeline/generate-rules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apk_lists: apkLists, working_folder: workingFolder, output_folder: outputFolder, rerun_failed: rerunFailed }),
+    });
+    const data = await res.json();
+    result.innerHTML = `<span class="badge badge-green">已啟動</span> Job ID: <span class="mono">${data.job_id}</span>`;
+  } catch(e) {
+    result.innerHTML = `<span style="color:var(--danger)">錯誤：${e.message}</span>`;
+  }
+}
+
+async function startCollect() {
+  const apkList = document.getElementById('col-apklist').value.trim();
+  const family = document.getElementById('col-family').value.trim();
+  const outputPath = document.getElementById('col-output').value.trim();
+
+  const result = document.getElementById('col-result');
+  result.innerHTML = '<span class="spinner"></span> 啟動中…';
+
+  try {
+    const res = await fetch(`/api/pipeline/collect-apk-by-family?apk_list=${encodeURIComponent(apkList)}&family=${encodeURIComponent(family)}&output_path=${encodeURIComponent(outputPath)}`, { method: 'POST' });
+    const data = await res.json();
+    result.innerHTML = `<span class="badge badge-green">已啟動</span> Job ID: <span class="mono">${data.job_id}</span>`;
+  } catch(e) {
+    result.innerHTML = `<span style="color:var(--danger)">錯誤：${e.message}</span>`;
+  }
+}
+
+async function startApplyRuleInfo() {
+  const apkPrediction = document.getElementById('apply-pred').value.trim();
+  const ruleInfo = document.getElementById('apply-info').value.trim();
+  const ruleBaseFolder = document.getElementById('apply-base').value.trim();
+  const revertScore = document.getElementById('apply-revert').checked;
+
+  const result = document.getElementById('apply-result');
+  result.innerHTML = '<span class="spinner"></span> 啟動中…';
+
+  try {
+    const res = await fetch('/api/pipeline/apply-rule-info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apk_prediction: apkPrediction, rule_info: ruleInfo, rule_base_folder: ruleBaseFolder, revert_score: revertScore }),
+    });
+    const data = await res.json();
+    result.innerHTML = `<span class="badge badge-green">已啟動</span> Job ID: <span class="mono">${data.job_id}</span>`;
+  } catch(e) {
+    result.innerHTML = `<span style="color:var(--danger)">錯誤：${e.message}</span>`;
+  }
+}
+
+// ── Jobs ──
+let expandedJobs = {};
+
+async function loadJobs() {
+  const container = document.getElementById('jobs-list');
+  document.getElementById('jobs-updated').textContent = '更新時間：' + new Date().toLocaleTimeString();
+
+  try {
+    const res = await fetch('/api/pipeline/jobs');
+    const data = await res.json();
+    const jobs = Object.entries(data).reverse();
+
+    if (!jobs.length) {
+      container.innerHTML = '<div class="empty-state">尚無任務紀錄</div>';
+      return;
+    }
+
+    container.innerHTML = jobs.map(([jobId, info]) => {
+      const badgeClass = { running: 'badge-blue', done: 'badge-green', failed: 'badge-red', pending: 'badge-yellow', error: 'badge-red' }[info.status] || 'badge-gray';
+      const statusLabel = { running: '執行中', done: '完成', failed: '失敗', pending: '等待', error: '錯誤' }[info.status] || info.status;
+      return `
+        <div class="job-card">
+          <div class="job-header">
+            <div class="flex-row">
+              <span class="badge ${badgeClass}">${statusLabel}</span>
+              <span class="job-id">${jobId}</span>
+              <span class="badge badge-gray">${info.type || '—'}</span>
+            </div>
+            <div class="flex-row">
+              <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="toggleLog('${jobId}')">📄 Log (${info.log_lines})</button>
+              <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteJob('${jobId}')">🗑</button>
+            </div>
+          </div>
+          <div class="text-sm">${info.started_at ? '開始：' + info.started_at : ''} ${info.finished_at ? '  結束：' + info.finished_at : ''}</div>
+          <div id="log-${jobId}" style="display:${expandedJobs[jobId] ? 'block' : 'none'};margin-top:10px;">
+            <div class="log-box" id="logbox-${jobId}"><span class="log-empty">載入中…</span></div>
+          </div>
+        </div>`;
+    }).join('');
+
+    // Auto-reload expanded logs
+    for (const jobId of Object.keys(expandedJobs)) {
+      if (expandedJobs[jobId]) await fetchLog(jobId);
+    }
+  } catch(e) {
+    container.innerHTML = `<div class="empty-state" style="color:var(--danger)">無法載入：${e.message}</div>`;
+  }
+}
+
+async function toggleLog(jobId) {
+  expandedJobs[jobId] = !expandedJobs[jobId];
+  const el = document.getElementById('log-' + jobId);
+  el.style.display = expandedJobs[jobId] ? 'block' : 'none';
+  if (expandedJobs[jobId]) await fetchLog(jobId);
+}
+
+async function fetchLog(jobId) {
+  const box = document.getElementById('logbox-' + jobId);
+  if (!box) return;
+  try {
+    const res = await fetch(`/api/pipeline/jobs/${jobId}`);
+    const data = await res.json();
+    const logs = data.logs || [];
+    box.textContent = logs.length ? logs.join('\n') : '（尚無 log）';
+    box.scrollTop = box.scrollHeight;
+  } catch {}
+}
+
+async function deleteJob(jobId) {
+  if (!confirm(`確定刪除任務 ${jobId}？`)) return;
+  await fetch(`/api/pipeline/jobs/${jobId}`, { method: 'DELETE' });
+  delete expandedJobs[jobId];
+  loadJobs();
+}
+
+// Auto-refresh jobs page if running
+setInterval(() => {
+  if (document.getElementById('page-jobs').classList.contains('active')) loadJobs();
+}, 5000);
+
+// ── Settings ──
+const SECRET_KEYS = ['MALWAREBAZAAR_API_KEY', 'ANDROZOO_API_KEY', 'VIRUS_TOTAL_API_KEY', 'OPENAI_API_KEY'];
+const PATH_KEYS   = ['APK_FOLDER', 'RULE_FOLDER', 'ANALYSIS_RESULT_FOLDER', 'DATASET_CACHE_FOLDER', 'CACHE_FOLDER', 'BENIGN_APK_LIST'];
+const ADVANCED_KEYS = ['ANALYSIS_PYTHON', 'GENERATE_RULES_CPUS', 'GENERATE_RULES_OBJECT_STORE_MB', 'GENERATE_RULES_SAMPLE_COUNT', 'GENERATE_RULES_MAX_APIS', 'MIN_SAMPLES', 'MAX_APK_DOWNLOAD'];
+const KEY_LABELS  = {
+  MALWAREBAZAAR_API_KEY:          'MalwareBazaar API Key',
+  ANDROZOO_API_KEY:               'AndroZoo API Key',
+  VIRUS_TOTAL_API_KEY:            'VirusTotal API Key',
+  OPENAI_API_KEY:                 'OpenAI API Key',
+  APK_FOLDER:                     'APK 存放目錄（Auto Pipeline 預設：data/apks/，可不填）',
+  RULE_FOLDER:                    '規則存放目錄',
+  ANALYSIS_RESULT_FOLDER:         'Quark 分析結果目錄',
+  DATASET_CACHE_FOLDER:           'Dataset 快取目錄',
+  CACHE_FOLDER:                   '通用快取目錄',
+  BENIGN_APK_LIST:                '良性 APK 清單路徑（.csv）',
+  ANALYSIS_PYTHON:                '分析用 Python 路徑（需含 quark-engine）',
+  GENERATE_RULES_CPUS:            '規則生成 CPU 數（留空＝自動偵測 cpu//2）',
+  GENERATE_RULES_OBJECT_STORE_MB: 'Ray Object Store 記憶體 MB（留空＝2048）',
+  GENERATE_RULES_SAMPLE_COUNT:    '規則生成使用樣本數（留空＝1，僅用第一隻 APK）',
+  GENERATE_RULES_MAX_APIS:        '規則生成 API 池上限（留空＝不限；測試可設 48，跑 48×48）',
+  MIN_SAMPLES:                    '最小樣本數（留空＝10；測試可設為 3）',
+  MAX_APK_DOWNLOAD:               '每家族最多下載數（留空＝100；測試可設為 5）',
+};
+
+async function loadSettings() {
+  try {
+    const res = await fetch('/api/settings');
+    const data = await res.json();
+    renderSettingsFields('settings-api-fields', SECRET_KEYS, data);
+    renderSettingsFields('settings-path-fields', PATH_KEYS, data);
+    renderAdvancedFields('settings-advanced-fields', ADVANCED_KEYS, data);
+  } catch(e) {
+    document.getElementById('settings-api-fields').innerHTML =
+      `<div class="text-sm" style="color:var(--danger)">無法載入：${e.message}</div>`;
+  }
+}
+
+function renderAdvancedFields(containerId, keys, data) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = keys.map(key => {
+    const info = data[key] || { masked: '', is_set: false };
+    const badgeHtml = info.is_set
+      ? '<span class="badge badge-green" style="font-size:10px;">已設定</span>'
+      : '<span class="badge" style="font-size:10px;background:var(--surface2);color:var(--text2);">未設定</span>';
+    return `
+      <div class="field" style="margin-bottom:14px;">
+        <label style="display:flex;align-items:center;gap:8px;">${KEY_LABELS[key] || key} ${badgeHtml}</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input id="setting-${key}" type="text" style="width:420px;"
+            value="${info.masked || ''}"
+            placeholder="例：/Users/yourname/miniconda3/envs/quark/bin/python" />
+        </div>
+        <div style="font-size:11px;color:var(--text2);margin-top:4px;">留空則自動偵測（uv run 或目前 Python）</div>
+      </div>`;
+  }).join('');
+}
+
+// Track which secret fields are in "editing" mode
+const _secretEditing = {};
+
+function renderSettingsFields(containerId, keys, data) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = keys.map(key => {
+    const info = data[key] || { masked: '', is_set: false, is_secret: false };
+    const isSecret = info.is_secret;
+    const isPath = PATH_KEYS.includes(key);
+
+    const badgeHtml = info.is_set
+      ? '<span class="badge badge-green" style="font-size:10px;">已設定</span>'
+      : '<span class="badge badge-red" style="font-size:10px;">未設定</span>';
+
+    if (isSecret) {
+      // Secret fields: show masked display + "變更" button; input only appears when editing
+      if (info.is_set) {
+        return `
+          <div class="field" style="margin-bottom:14px;" id="field-wrap-${key}">
+            <label style="display:flex;align-items:center;gap:8px;">${KEY_LABELS[key] || key} ${badgeHtml}</label>
+            <div id="secret-display-${key}" style="display:flex;gap:8px;align-items:center;">
+              <span style="font-family:var(--mono);font-size:13px;color:var(--text2);background:var(--surface2);
+                border:1px solid var(--border);border-radius:6px;padding:8px 12px;width:380px;
+                letter-spacing:.12em;">${info.masked}</span>
+              <button class="btn btn-secondary" style="padding:6px 10px;font-size:12px;"
+                onclick="startEditSecret('${key}')">🔄 變更</button>
+            </div>
+            <div id="secret-edit-${key}" style="display:none;gap:8px;align-items:center;">
+              <input id="setting-${key}" type="password" style="width:380px;"
+                placeholder="輸入新的 API Key" autocomplete="off" />
+              <button class="btn btn-secondary" style="padding:6px 10px;font-size:12px;"
+                onclick="toggleVisibility('setting-${key}', this)">👁 顯示</button>
+              <button class="btn btn-secondary" style="padding:6px 10px;font-size:12px;"
+                onclick="cancelEditSecret('${key}')">✕ 取消</button>
+            </div>
+          </div>`;
+      } else {
+        // Not yet set: show input directly
+        return `
+          <div class="field" style="margin-bottom:14px;">
+            <label style="display:flex;align-items:center;gap:8px;">${KEY_LABELS[key] || key} ${badgeHtml}</label>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input id="setting-${key}" type="password" style="width:380px;"
+                placeholder="輸入 API Key" autocomplete="off" />
+              <button class="btn btn-secondary" style="padding:6px 10px;font-size:12px;"
+                onclick="toggleVisibility('setting-${key}', this)">👁 顯示</button>
+            </div>
+          </div>`;
+      }
+    } else {
+      // Path fields: pre-fill with current value, always editable
+      return `
+        <div class="field" style="margin-bottom:14px;">
+          <label style="display:flex;align-items:center;gap:8px;">${KEY_LABELS[key] || key} ${badgeHtml}</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input id="setting-${key}" type="text" style="width:380px;"
+              value="${info.masked || ''}"
+              placeholder="（尚未設定）" autocomplete="off" />
+            <button class="btn btn-secondary" style="padding:6px 10px;font-size:12px;"
+              onclick="openDirModal('setting-${key}')">📂 選擇</button>
+          </div>
+        </div>`;
+    }
+  }).join('');
+}
+
+function startEditSecret(key) {
+  _secretEditing[key] = true;
+  document.getElementById(`secret-display-${key}`).style.display = 'none';
+  const editDiv = document.getElementById(`secret-edit-${key}`);
+  editDiv.style.display = 'flex';
+  document.getElementById(`setting-${key}`)?.focus();
+}
+
+function cancelEditSecret(key) {
+  _secretEditing[key] = false;
+  document.getElementById(`secret-display-${key}`).style.display = 'flex';
+  document.getElementById(`secret-edit-${key}`).style.display = 'none';
+  const input = document.getElementById(`setting-${key}`);
+  if (input) input.value = '';
+}
+
+function toggleVisibility(inputId, btn) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈 隱藏';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁 顯示';
+  }
+}
+
+async function saveSettings() {
+  const settings = {};
+
+  // Secrets: only include if the field is visible (editing mode) and has a value
+  for (const key of SECRET_KEYS) {
+    const el = document.getElementById('setting-' + key);
+    if (el && el.value.trim()) settings[key] = el.value.trim();
+  }
+
+  // Paths + advanced: always include current input value (pre-filled from .env, so safe to resave)
+  for (const key of [...PATH_KEYS, ...ADVANCED_KEYS]) {
+    const el = document.getElementById('setting-' + key);
+    if (el) settings[key] = el.value;  // empty string = backend will skip
+  }
+
+  const resultEl = document.getElementById('settings-save-result');
+  resultEl.innerHTML = '<span class="spinner"></span> 儲存中…';
+
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings }),
+    });
+    const data = await res.json();
+
+    if (data.saved.length === 0) {
+      resultEl.innerHTML = '<span style="color:var(--warn);">沒有任何欄位被更新</span>';
+    } else {
+      resultEl.innerHTML = `<span style="color:var(--success);">✓ 已儲存：${data.saved.join(', ')}</span>`;
+      setTimeout(() => { loadSettings(); resultEl.textContent = ''; }, 1200);
+    }
+  } catch(e) {
+    resultEl.innerHTML = `<span style="color:var(--danger)">錯誤：${e.message}</span>`;
+  }
+}
+
+// ── Directory Picker Modal ──
+let _dirTargetInputId = null;
+let _dirCurrentPath = null;
+
+async function openDirModal(inputId) {
+  _dirTargetInputId = inputId;
+  const existingVal = document.getElementById(inputId)?.value.trim();
+  const startPath = existingVal || '~';
+  document.getElementById('dir-modal').classList.add('open');
+  await browseTo(startPath);
+}
+
+function closeDirModal(event) {
+  if (event && event.target !== document.getElementById('dir-modal')) return;
+  document.getElementById('dir-modal').classList.remove('open');
+  _dirTargetInputId = null;
+}
+
+function confirmDirSelection() {
+  if (_dirCurrentPath && _dirTargetInputId) {
+    const input = document.getElementById(_dirTargetInputId);
+    if (input) input.value = _dirCurrentPath;
+  }
+  document.getElementById('dir-modal').classList.remove('open');
+  _dirTargetInputId = null;
+}
+
+async function browseTo(path) {
+  const body = document.getElementById('dir-body');
+  const breadcrumbEl = document.getElementById('dir-breadcrumb');
+  const selectedPathEl = document.getElementById('dir-selected-path');
+  body.innerHTML = '<div class="empty-state">載入中…</div>';
+
+  try {
+    const res = await fetch(`/api/fs/browse?path=${encodeURIComponent(path)}`);
+    if (!res.ok) {
+      const err = await res.json();
+      body.innerHTML = `<div class="empty-state" style="color:var(--danger)">${err.detail}</div>`;
+      return;
+    }
+    const data = await res.json();
+    _dirCurrentPath = data.current;
+    selectedPathEl.textContent = data.current;
+
+    // Breadcrumb
+    breadcrumbEl.innerHTML = data.breadcrumb.map((b, i) => {
+      const isLast = i === data.breadcrumb.length - 1;
+      return `${i > 0 ? '<span class="breadcrumb-sep">/</span>' : ''}
+        <span class="breadcrumb-item ${isLast ? 'active' : ''}"
+          onclick="${isLast ? '' : `browseTo('${b.path.replace(/'/g, "\\'")}')`}"
+          style="${isLast ? 'color:var(--text);cursor:default;' : ''}"
+        >${b.label}</span>`;
+    }).join('');
+
+    // Entries
+    let html = '';
+    if (data.parent) {
+      html += `<div class="dir-entry" onclick="browseTo('${data.parent.replace(/'/g, "\\'")}')">
+        <span class="entry-icon">⬆️</span>
+        <span class="entry-name" style="color:var(--text2);">..</span>
+      </div>`;
+    }
+    if (data.entries.length === 0) {
+      html += '<div class="empty-state" style="padding:20px;">（空資料夾）</div>';
+    }
+    for (const entry of data.entries) {
+      const safePath = entry.path.replace(/'/g, "\\'");
+      if (entry.is_dir) {
+        html += `<div class="dir-entry" onclick="browseTo('${safePath}')">
+          <span class="entry-icon">📁</span>
+          <span class="entry-name">${entry.name}</span>
+        </div>`;
+      } else {
+        html += `<div class="dir-entry" style="cursor:default;opacity:.5;">
+          <span class="entry-icon">📄</span>
+          <span class="entry-name is-file">${entry.name}</span>
+        </div>`;
+      }
+    }
+    body.innerHTML = html;
+  } catch(e) {
+    body.innerHTML = `<div class="empty-state" style="color:var(--danger)">錯誤：${e.message}</div>`;
+  }
+}
+
+// ── Auto Pipeline ──
+const AP_STATUS_META = {
+  searching:    { label:'搜尋中',    cls:'badge-blue',   icon:'🔍', spin:true  },
+  search_failed:{ label:'搜尋失敗',  cls:'badge-red',    icon:'✗',  spin:false },
+  downloading:  { label:'下載中',    cls:'badge-blue',   icon:'⬇',  spin:true  },
+  insufficient: { label:'樣本不足',  cls:'badge-red',    icon:'✗',  spin:false },
+  ready:        { label:'備料完成',  cls:'badge-green',  icon:'✓',  spin:false },
+  queued:       { label:'佇列等待',  cls:'badge-yellow', icon:'⏳', spin:false },
+  analyzing:    { label:'分析中',    cls:'badge-blue',   icon:'⚙',  spin:true  },
+  completed:    { label:'分析完成',  cls:'badge-blue',   icon:'✅', spin:false, color:'var(--accent2)' },
+  pr_sent:      { label:'PR 已發送', cls:'badge-yellow', icon:'📬', spin:false },
+  pr_merged:    { label:'PR 已合併', cls:'badge-green',  icon:'🎉', spin:false },
+};
+
+let _apExpandedLogs = {};
+
+let _apPythonChecked = false;
+async function apCheckPython() {
+  if (_apPythonChecked) return;
+  _apPythonChecked = true;
+  const banner = document.getElementById('ap-python-banner');
+  if (!banner) return;
+  try {
+    const res = await fetch('/api/config/python-check');
+    const d = await res.json();
+    if (d.packages_ok) {
+      banner.style.display = 'none';
+    } else {
+      const macosNote = d.is_macos ? `
+        <div class="text-sm" style="margin-top:10px;padding:10px;background:var(--surface2);border-radius:6px;">
+          <b>macOS 設定步驟</b>（pyproject.toml 的 uv lockfile 限定 Linux，需手動建環境）：
+          <pre style="font-family:var(--mono);font-size:11px;color:var(--success);margin:6px 0;white-space:pre-wrap;">conda create -n quark python=3.13
+conda activate quark
+pip install -e ../quark-engine
+pip install -r requirements-analysis.txt
+which python   # 複製此路徑</pre>
+          然後到 <b>Settings → 進階設定</b> 填入 <code style="font-family:var(--mono);">which python</code> 的輸出路徑。
+        </div>` : `
+        <div class="text-sm" style="margin-top:10px;">
+          請到 <b>Settings → 進階設定</b> 填寫含有 quark-engine 的 Python 路徑。
+        </div>`;
+
+      banner.style.display = 'block';
+      banner.innerHTML = `
+        <div class="card" style="border-color:var(--warn);margin-bottom:16px;">
+          <div class="card-title" style="color:var(--warn);">⚠️ 分析 Python 環境未就緒</div>
+          <div class="text-sm" style="margin-bottom:6px;">
+            目前使用：<code style="font-family:var(--mono);color:var(--accent);">${d.python_cmd}</code>（${d.source}）<br>
+            無法 import <b>quark</b> 或 <b>prefect</b>，分析步驟將會失敗。
+          </div>
+          <div class="text-sm" style="color:var(--text2);margin-bottom:4px;">
+            錯誤：<code style="font-family:var(--mono);font-size:11px;">${d.check_output.slice(0,400)}</code>
+          </div>
+          ${macosNote}
+        </div>`;
+    }
+  } catch(e) { /* ignore banner errors */ }
+}
+
+async function apLoad() {
+  apCheckPython();
+  try {
+    const res = await fetch('/api/auto-pipeline/families');
+    const data = await res.json();
+    apRender(data);
+  } catch(e) {
+    document.getElementById('ap-families-grid').innerHTML =
+      `<div class="empty-state" style="color:var(--danger)">載入失敗：${e.message}</div>`;
+  }
+}
+
+function apRender(data) {
+  const families = Object.values(data);
+  const grid = document.getElementById('ap-families-grid');
+  const empty = document.getElementById('ap-empty');
+  const statsEl = document.getElementById('ap-stats');
+  const queueCard = document.getElementById('ap-queue-card');
+
+  if (!families.length) {
+    grid.innerHTML = '<div class="empty-state" id="ap-empty" style="grid-column:1/-1;">尚無家族資料</div>';
+    statsEl.innerHTML = '';
+    queueCard.style.display = 'none';
+    return;
+  }
+
+  // Stats
+  const counts = {};
+  for (const f of families) counts[f.status] = (counts[f.status] || 0) + 1;
+  const statDefs = [
+    ['ready', '備料完成', 'var(--success)'],
+    ['queued', '佇列等待', 'var(--warn)'],
+    ['analyzing', '分析中', 'var(--accent)'],
+    ['completed', '分析完成', 'var(--accent2)'],
+    ['pr_sent', 'PR 發送', 'var(--warn)'],
+    ['pr_merged', 'PR Merged', 'var(--success)'],
+    ['search_failed', '搜尋失敗', 'var(--danger)'],
+    ['insufficient', '樣本不足', 'var(--danger)'],
+  ];
+  statsEl.innerHTML = statDefs
+    .filter(([k]) => counts[k])
+    .map(([k, label, color]) =>
+      `<div class="ap-stat-chip">
+        <span class="n" style="color:${color};">${counts[k]}</span>
+        <span style="color:var(--text2);">${label}</span>
+      </div>`
+    ).join('');
+
+  // Queue panel
+  const queued = families
+    .filter(f => ['queued', 'analyzing'].includes(f.status))
+    .sort((a, b) => (a.queued_at || '').localeCompare(b.queued_at || ''));
+  if (queued.length) {
+    queueCard.style.display = 'block';
+    document.getElementById('ap-queue-list').innerHTML = queued.map((f, i) => {
+      const meta = AP_STATUS_META[f.status] || {};
+      return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);">
+        <span style="color:var(--text2);font-size:13px;width:24px;text-align:center;">${i + 1}</span>
+        <span class="family-tag">${f.family}</span>
+        <span class="badge ${meta.cls}">${meta.icon} ${meta.label}</span>
+        ${f.status === 'analyzing' ? '<span class="spinner"></span>' : ''}
+      </div>`;
+    }).join('');
+  } else {
+    queueCard.style.display = 'none';
+  }
+
+  // Family cards — sort by status priority
+  const ORDER = ['analyzing','queued','completed','pr_sent','ready','downloading','searching','pr_merged','search_failed','insufficient'];
+  families.sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status));
+
+  // Save scroll positions of expanded log boxes before re-render
+  const savedScroll = {};
+  for (const family of Object.keys(_apExpandedLogs)) {
+    if (!_apExpandedLogs[family]) continue;
+    const box = document.querySelector(`#ap-log-${family} .ap-log-box`);
+    if (box) {
+      const atBottom = box.scrollHeight - box.scrollTop <= box.clientHeight + 4;
+      savedScroll[family] = atBottom ? 'bottom' : box.scrollTop;
+    }
+  }
+
+  grid.innerHTML = families.map(f => apFamilyCard(f)).join('');
+
+  // Restore scroll positions after re-render
+  for (const [family, pos] of Object.entries(savedScroll)) {
+    const box = document.querySelector(`#ap-log-${family} .ap-log-box`);
+    if (!box) continue;
+    box.scrollTop = pos === 'bottom' ? box.scrollHeight : pos;
+  }
+}
+
+function _apComputeStages(f) {
+  const s = f.status;
+  const log = f.log || [];
+
+  // Detect rule gen progress — isolate last run by finding last PROGRESS:0/N
+  let runStart = 0;
+  for (let i = 0; i < log.length; i++) {
+    if (/PROGRESS:0\/\d+/.test(log[i])) runStart = i;
+  }
+  let progDone = 0, progTotal = 0, inTraining = false;
+  for (let i = runStart; i < log.length; i++) {
+    const m = log[i].match(/PROGRESS:(\d+)\/(\d+)/);
+    if (m) { progDone = +m[1]; progTotal = +m[2]; }
+    if (log[i].includes('Step 2')) inTraining = true;
+  }
+
+  const afterSearch   = ['downloading','download_failed','ready','queued','analyzing','completed','pr_sent','pr_merged'];
+  const afterDownload = ['ready','queued','analyzing','completed','pr_sent','pr_merged'];
+  const afterRuleGen  = ['completed','pr_sent','pr_merged'];
+  const analyzing     = s === 'analyzing';
+
+  const dlPct = (f.bazaar_count > 0 && f.downloaded_count != null)
+    ? Math.min(100, Math.round(((f.downloaded_count||0) + (f.failed_count||0)) / f.bazaar_count * 100)) : 0;
+  const rulePct = progTotal > 0 ? Math.round(progDone / progTotal * 100) : 0;
+
+  return [
+    { icon:'🔍', label:'搜尋',
+      state: s==='searching' ? 'active' : (s==='search_failed'||s==='insufficient') ? 'failed'
+           : afterSearch.includes(s) ? 'done' : 'pending',
+      restart: afterSearch.includes(s) ? `apRestartSearch('${f.family}')` : null,
+      pct: null },
+    { icon:'📥', label:'下載',
+      state: s==='downloading' ? 'active' : s==='download_failed' ? 'failed'
+           : afterDownload.includes(s) ? 'done' : 'pending',
+      restart: afterDownload.includes(s) ? `apRestartDownload('${f.family}')` : null,
+      pct: s==='downloading' ? dlPct : null },
+    { icon:'⚙️', label:'規則生成',
+      state: (analyzing && !inTraining) ? 'active'
+           : (afterRuleGen.includes(s) || (analyzing && inTraining)) ? 'done' : 'pending',
+      restart: null,
+      pct: (analyzing && !inTraining) ? rulePct : null },
+    { icon:'🎯', label:'調整權重',
+      state: (analyzing && inTraining) ? 'active' : afterRuleGen.includes(s) ? 'done' : 'pending',
+      restart: afterRuleGen.includes(s) ? `apRestartTrain('${f.family}')` : null,
+      pct: null },
+    { icon:'📬', label:'發布PR',
+      state: (s==='pr_sent'||s==='pr_merged') ? 'done' : s==='completed' ? 'active' : 'pending',
+      restart: null,
+      pct: null },
+  ];
+}
+
+function _apStepper(f) {
+  const stages = _apComputeStages(f);
+  const html = stages.map((st, i) => {
+    const dotIcon = st.state==='done' ? '✓' : st.state==='failed' ? '✕' : (i+1).toString();
+    const bar = st.pct !== null
+      ? `<div class="ap-stage-progress"><div class="ap-stage-progress-fill" style="width:${st.pct}%"></div></div>` : '';
+    const restartBtn = st.restart
+      ? `<button class="ap-stage-restart" onclick="${st.restart}" title="重來">🔄</button>` : '';
+    return `<div class="ap-stage ${st.state}">
+      <div class="ap-stage-dot">${dotIcon}</div>
+      <div class="ap-stage-label">${st.icon} ${st.label}</div>
+      ${bar}${restartBtn}
+    </div>`;
+  }).join('');
+  return `<div class="ap-stepper">${html}</div>`;
+}
+
+function apFamilyCard(f) {
+  const meta = AP_STATUS_META[f.status] || { label: f.status, cls: 'badge-gray', icon: '?', spin: false };
+  const expanded = _apExpandedLogs[f.family];
+  const analyzing = f.status === 'analyzing';
+
+  let actions = '';
+  let extra = '';
+
+  if (f.status === 'search_failed' || f.status === 'insufficient') {
+    actions += `<button class="btn btn-secondary" style="font-size:12px;padding:5px 10px;" onclick="apRetry('${f.family}')">🔄 重試</button>`;
+    if (f.error) extra += `<div class="text-sm" style="color:var(--danger);margin-bottom:6px;">${f.error}</div>`;
+  }
+
+  if (f.status === 'ready') {
+    actions += `<button class="btn btn-primary" style="font-size:12px;padding:5px 12px;" onclick="apEnqueue('${f.family}')">▶ 加入分析佇列</button>`;
+    if (f.error) extra += `<div class="text-sm" style="color:var(--danger);margin-bottom:6px;">上次失敗：${f.error}</div>`;
+  }
+
+  if (f.status === 'queued') {
+    actions += `<button class="btn btn-secondary" style="font-size:12px;padding:5px 10px;" onclick="apDequeue('${f.family}')">✕ 取消佇列</button>`;
+  }
+
+  if (analyzing) {
+    // Parse progress state for status text below stepper
+    const log = f.log || [];
+    let runStart = 0;
+    for (let i = 0; i < log.length; i++) {
+      if (/PROGRESS:0\/\d+/.test(log[i])) runStart = i;
+    }
+    let progDone = 0, progTotal = 0, inTraining = false;
+    for (let i = runStart; i < log.length; i++) {
+      const m = log[i].match(/PROGRESS:(\d+)\/(\d+)/);
+      if (m) { progDone = +m[1]; progTotal = +m[2]; }
+      if (log[i].includes('Step 2')) inTraining = true;
+    }
+    if (inTraining) {
+      extra += `<div class="flex-row" style="margin-bottom:6px;gap:8px;align-items:center;">
+        <span class="spinner"></span><span class="text-sm">Step 2：權重調整中…</span>
+      </div>`;
+    } else if (progTotal > 0) {
+      const pct = Math.round(progDone / progTotal * 100);
+      extra += `<div class="flex-row" style="margin-bottom:6px;gap:8px;align-items:center;">
+        <span class="spinner" style="width:10px;height:10px;border-width:1.5px;"></span>
+        <span class="text-sm">Step 1：規則生成 ${progDone}/${progTotal} (${pct}%)</span>
+      </div>`;
+    } else {
+      extra += `<div class="flex-row" style="margin-bottom:6px;gap:8px;align-items:center;">
+        <span class="spinner"></span><span class="text-sm">Step 1：規則生成中（等待 Ray 初始化…）</span>
+      </div>`;
+    }
+    actions += `<button class="btn btn-danger" style="font-size:12px;padding:5px 10px;" onclick="apStop('${f.family}')">⏹ 停止</button>`;
+  }
+
+  if (f.status === 'completed') {
+    extra += `<div class="text-sm" style="margin-bottom:8px;">規則數：<b style="color:var(--text);">${f.rules_count || '?'}</b>　預測 CSV：<span class="mono">${(f.prediction_csv || '').split('/').pop()}</span></div>`;
+    extra += `<div class="ap-pr-row">
+      <input id="pr-url-${f.family}" type="text" style="width:260px;font-size:12px;" placeholder="輸入 PR URL…" />
+      <button class="btn btn-primary" style="font-size:12px;padding:5px 12px;" onclick="apSendPR('${f.family}')">📬 送出 PR</button>
+    </div>`;
+  }
+
+  if (f.status === 'pr_sent') {
+    extra += `<div class="text-sm" style="margin-bottom:8px;">PR：<a href="${f.pr_url}" target="_blank" style="color:var(--accent);">${f.pr_url}</a></div>`;
+    actions += `<button class="btn btn-success" style="font-size:12px;padding:5px 12px;" onclick="apMarkMerged('${f.family}')">✅ 標記已 Merge</button>`;
+  }
+
+  if (f.status === 'pr_merged') {
+    extra += `<div class="text-sm">PR merged：${f.pr_merged_at || ''}　<a href="${f.pr_url}" target="_blank" style="color:var(--accent);">${f.pr_url || ''}</a></div>`;
+  }
+
+  const logSection = `
+    <div style="margin-top:6px;">
+      <button class="btn btn-secondary" style="font-size:11px;padding:3px 8px;"
+        onclick="apToggleLog('${f.family}')">📄 Log ${expanded ? '▲' : '▼'}</button>
+      <div id="ap-log-${f.family}" style="display:${expanded ? 'block' : 'none'};">
+        <div class="ap-log-box">${(f.log || []).join('\n') || '（尚無 log）'}</div>
+      </div>
+    </div>`;
+
+  return `<div class="ap-card">
+    <div class="ap-card-header">
+      <span class="ap-family-name">${f.family}</span>
+      <span class="badge ${meta.cls}">${meta.spin ? '<span class="spinner" style="width:10px;height:10px;border-width:1.5px;margin-right:4px;"></span>' : ''}${meta.label}</span>
+    </div>
+    ${_apStepper(f)}
+    <div class="ap-card-body">
+      <div class="ap-counts">
+        <span>MalwareBazaar: <b>${f.bazaar_count ?? '—'}</b></span>
+        <span>已下載: <b>${f.downloaded_count ?? '—'}</b></span>
+        ${f.failed_count ? `<span style="color:var(--danger)">下載失敗: <b>${f.failed_count}</b></span>` : ''}
+        ${f.rules_count ? `<span>規則數: <b>${f.rules_count}</b></span>` : ''}
+      </div>
+      ${extra}
+      <div class="ap-actions">
+        ${actions}
+        <button class="btn btn-danger" style="font-size:12px;padding:5px 10px;" onclick="apDelete('${f.family}')">🗑 刪除</button>
+      </div>
+      ${logSection}
+    </div>
+  </div>`;
+}
+
+function apToggleLog(family) {
+  _apExpandedLogs[family] = !_apExpandedLogs[family];
+  const el = document.getElementById(`ap-log-${family}`);
+  if (el) el.style.display = _apExpandedLogs[family] ? 'block' : 'none';
+  // Scroll to bottom only when first opening
+  if (_apExpandedLogs[family]) {
+    const box = el?.querySelector('.ap-log-box');
+    if (box) box.scrollTop = box.scrollHeight;
+  }
+}
+
+async function apAddFamilies() {
+  const raw = document.getElementById('ap-family-input').value.trim();
+  if (!raw) return;
+
+  // Parse: try to detect CSV-style (has commas/semicolons → extract family column) or plain names
+  let names = [];
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines[0].toLowerCase().includes('family') || lines[0].includes(',')) {
+    // CSV-like: look for 'family' header column
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const fi = headers.indexOf('family');
+    if (fi >= 0) {
+      names = lines.slice(1).map(l => l.split(',')[fi]?.trim()).filter(Boolean);
+    } else {
+      names = lines; // fallback: use as-is
+    }
+  } else {
+    names = lines;
+  }
+
+  const resultEl = document.getElementById('ap-add-result');
+  resultEl.innerHTML = '<span class="spinner"></span> 加入中…';
+
+  try {
+    const res = await fetch('/api/auto-pipeline/families', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ families: names }),
+    });
+    const data = await res.json();
+    const msg = [];
+    if (data.added.length) msg.push(`<span style="color:var(--success)">已加入：${data.added.join(', ')}</span>`);
+    if (data.skipped.length) msg.push(`<span style="color:var(--warn)">已略過（狀態不允許重加）：${data.skipped.join(', ')}</span>`);
+    resultEl.innerHTML = msg.join('　');
+    document.getElementById('ap-family-input').value = '';
+  } catch(e) {
+    resultEl.innerHTML = `<span style="color:var(--danger)">${e.message}</span>`;
+  }
+}
+
+async function apEnqueue(family) {
+  await fetch(`/api/auto-pipeline/families/${family}/enqueue`, { method: 'POST' });
+}
+
+async function apStop(family) {
+  if (!confirm(`停止 ${family} 的分析？\n（進度已由 diskcache 記錄，重新加入佇列可繼續）`)) return;
+  await fetch(`/api/auto-pipeline/families/${family}/stop`, { method: 'POST' });
+  await apLoad();
+}
+
+async function apClearRules(family) {
+  if (!confirm(`清除 ${family} 已生成的規則？\n（此操作不可復原，需重新執行規則生成）`)) return;
+  const res = await fetch(`/api/auto-pipeline/families/${encodeURIComponent(family)}/rules`, { method: 'DELETE' });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    alert(`清除失敗：${d.detail || res.status}`);
+  }
+  await apLoad();
+}
+
+async function apRetry(family) {
+  await fetch(`/api/auto-pipeline/families/${family}/retry`, { method: 'POST' });
+}
+
+async function apDequeue(family) {
+  if (!confirm(`取消 ${family} 的佇列？\n（已下載的樣本不會刪除）`)) return;
+  await fetch(`/api/auto-pipeline/families/${encodeURIComponent(family)}`, { method: 'DELETE' });
+  await apLoad();
+}
+
+async function apDelete(family) {
+  if (!confirm(`確定移除 ${family}？\n（將同時刪除已下載的 APK、CSV 和規則）`)) return;
+  await fetch(`/api/auto-pipeline/families/${encodeURIComponent(family)}`, { method: 'DELETE' });
+  await apLoad();
+}
+
+async function apRestartSearch(family) {
+  if (!confirm(`從頭重新搜尋 ${family}？\n（將刪除所有已下載樣本、CSV 和規則）`)) return;
+  await fetch(`/api/auto-pipeline/families/${encodeURIComponent(family)}/restart/search`, { method: 'POST' });
+  await apLoad();
+}
+
+async function apRestartDownload(family) {
+  if (!confirm(`重新下載 ${family} 的 APK？\n（將刪除已下載樣本和規則，重新從 AndroZoo 下載）`)) return;
+  await fetch(`/api/auto-pipeline/families/${encodeURIComponent(family)}/restart/download`, { method: 'POST' });
+  await apLoad();
+}
+
+async function apRestartTrain(family) {
+  if (!confirm(`重新執行 ${family} 的權重調整？\n（保留已生成的規則，只重新跑 adjust_rule_score.py）`)) return;
+  const res = await fetch(`/api/auto-pipeline/families/${encodeURIComponent(family)}/restart/train`, { method: 'POST' });
+  if (!res.ok) { const d = await res.json().catch(() => ({})); alert(`失敗：${d.detail || res.status}`); }
+  await apLoad();
+}
+
+async function apSendPR(family) {
+  const prUrl = document.getElementById(`pr-url-${family}`)?.value.trim();
+  if (!prUrl) { alert('請輸入 PR URL'); return; }
+  await fetch(`/api/auto-pipeline/families/${family}/pr`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pr_url: prUrl }),
+  });
+}
+
+async function apMarkMerged(family) {
+  if (!confirm(`確認 ${family} 的 PR 已 merge？`)) return;
+  await fetch(`/api/auto-pipeline/families/${family}/pr/merged`, { method: 'POST' });
+}
+
+// Auto-refresh Auto Pipeline page every 5 seconds
+setInterval(async () => {
+  if (document.getElementById('page-auto-pipeline').classList.contains('active')) {
+    await apLoad();
+  }
+}, 5000);
+
+// Init — Auto Pipeline is the default page
+apLoad();
+</script>
+</body>
+</html>
