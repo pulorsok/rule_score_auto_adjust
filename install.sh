@@ -68,8 +68,13 @@ if ! command -v uv &>/dev/null; then
     info "Installing uv..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
     # Make uv available in the current shell
-    export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
-    command -v uv &>/dev/null || error "uv installation failed — please add ~/.local/bin to PATH and retry"
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    # Persist PATH to ~/.bashrc so future shells find uv
+    if ! grep -q '\.local/bin' "$HOME/.bashrc" 2>/dev/null; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+        info "Added ~/.local/bin to PATH in ~/.bashrc"
+    fi
+    command -v uv &>/dev/null || error "uv installation failed — please run: export PATH=\"\$HOME/.local/bin:\$PATH\""
     success "uv installed: $(uv --version)"
 else
     success "uv already installed: $(uv --version)"
@@ -154,8 +159,10 @@ success "Data directories ready"
 echo -e "\n${GREEN}${BOLD}✓ Installation complete!${RESET}\n"
 echo -e "Next steps:"
 echo -e "  ${BOLD}1.${RESET} Fill in API keys in ${CYAN}.env${RESET}"
-echo -e "  ${BOLD}2.${RESET} Start the web UI:   ${CYAN}./start.sh${RESET}"
-echo -e "  ${BOLD}3.${RESET} Open browser:        ${CYAN}http://localhost:9527${RESET}"
+echo -e "  ${BOLD}2.${RESET} ${YELLOW}Reload PATH${RESET} (or open a new terminal):"
+echo -e "     ${CYAN}source ~/.bashrc${RESET}"
+echo -e "  ${BOLD}3.${RESET} Start the web UI:   ${CYAN}./start.sh${RESET}"
+echo -e "  ${BOLD}4.${RESET} Open browser:        ${CYAN}http://localhost:9527${RESET}"
 echo -e ""
 echo -e "Optional — start Prefect server (requires Docker):"
 echo -e "  ${CYAN}docker compose -f service/prefect/compose.yaml up -d${RESET}"

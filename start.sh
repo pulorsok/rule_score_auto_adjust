@@ -15,7 +15,13 @@ PORT="${PORT:-9527}"
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
 if ! command -v uv &>/dev/null; then
-    echo "[✗] uv not found. Run ./install.sh first."
+    # Try common install locations before giving up
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+fi
+if ! command -v uv &>/dev/null; then
+    echo "[✗] uv not found."
+    echo "    Fix: source ~/.bashrc  (or open a new terminal)"
+    echo "    If uv is not installed yet, run: ./install.sh"
     exit 1
 fi
 
