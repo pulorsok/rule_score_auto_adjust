@@ -114,6 +114,30 @@
     .modal-header h3 { font-size:15px; font-weight:700; }
     .modal-close { background:none; border:none; color:var(--text2); font-size:20px; cursor:pointer; line-height:1; padding:0 4px; }
     .modal-close:hover { color:var(--text); }
+    /* Rules review modal */
+    #rules-modal .modal { width:900px; max-width:95vw; height:75vh; display:flex; flex-direction:column; }
+    .rules-body { display:flex; flex:1; overflow:hidden; }
+    .rules-list-panel { width:280px; min-width:200px; border-right:1px solid var(--border); overflow-y:auto; flex-shrink:0; }
+    .rules-detail-panel { flex:1; overflow-y:auto; padding:16px; font-family:var(--mono); font-size:12px; }
+    .rule-item { padding:8px 14px; cursor:pointer; border-bottom:1px solid var(--border); transition:background .1s; }
+    .rule-item:hover { background:var(--surface2); }
+    .rule-item.active { background:var(--accent); color:#fff; }
+    .rule-item.active .rule-score { color:#fff; }
+    .rule-item-name { font-size:11px; font-family:var(--mono); color:var(--text2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .rule-item.active .rule-item-name { color:#ffffffcc; }
+    .rule-item-crime { font-size:12px; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .rule-score { font-weight:700; font-size:12px; }
+    .rule-score.pos { color:#22c55e; }
+    .rule-score.neg { color:#ef4444; }
+    .rule-score.zero { color:var(--text2); }
+    .rule-detail-field { margin-bottom:12px; }
+    .rule-detail-field label { display:block; font-size:10px; text-transform:uppercase; color:var(--text2); margin-bottom:4px; letter-spacing:.05em; }
+    .rule-detail-field pre { white-space:pre-wrap; word-break:break-all; margin:0; color:var(--text); }
+    .rule-detail-field .tag { display:inline-block; background:var(--surface2); border:1px solid var(--border); border-radius:4px; padding:2px 7px; font-size:11px; margin:2px; }
+    .stage-bar { display:flex; gap:4px; align-items:center; margin-top:4px; }
+    .stage-dot { width:16px; height:16px; border-radius:50%; font-size:9px; display:flex; align-items:center; justify-content:center; font-weight:700; }
+    .stage-dot.pass { background:#22c55e; color:#fff; }
+    .stage-dot.fail { background:var(--surface2); border:1px solid var(--border); color:var(--text2); }
     .modal-breadcrumb { padding:10px 20px; background:var(--surface2); display:flex; align-items:center; gap:4px; flex-wrap:wrap; font-size:12px; font-family:var(--mono); border-bottom:1px solid var(--border); }
     .breadcrumb-item { color:var(--accent); cursor:pointer; }
     .breadcrumb-item:hover { text-decoration:underline; }
@@ -493,6 +517,24 @@
 
   </div><!-- /main -->
 </div><!-- /layout -->
+
+<!-- ── Rules Review Modal ── -->
+<div class="modal-overlay" id="rules-modal" onclick="closeRulesModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3 id="rules-modal-title">規則審查</h3>
+      <button class="modal-close" onclick="document.getElementById('rules-modal').classList.remove('open')">×</button>
+    </div>
+    <div class="rules-body">
+      <div class="rules-list-panel" id="rules-list">
+        <div style="padding:16px;color:var(--text2)">載入中…</div>
+      </div>
+      <div class="rules-detail-panel" id="rules-detail">
+        <div style="color:var(--text2)">← 選擇一條規則查看詳情</div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ── Directory Picker Modal ── -->
 <div class="modal-overlay" id="dir-modal" onclick="closeDirModal(event)">
@@ -1492,6 +1534,9 @@ function apFamilyCard(f) {
 
   if (f.status === 'completed') {
     extra += `<div class="text-sm" style="margin-bottom:8px;">規則數：<b style="color:var(--text);">${f.rules_count || '?'}</b>　預測 CSV：<span class="mono">${(f.prediction_csv || '').split('/').pop()}</span></div>`;
+    extra += `<div style="margin-bottom:8px;">
+      <button class="btn btn-secondary" style="font-size:12px;padding:5px 12px;" onclick="apShowRules('${f.family}')">🔍 審查規則</button>
+    </div>`;
     extra += `<div class="ap-pr-row">
       <input id="pr-url-${f.family}" type="text" style="width:260px;font-size:12px;" placeholder="輸入 PR URL…" />
       <button class="btn btn-primary" style="font-size:12px;padding:5px 12px;" onclick="apSendPR('${f.family}')">📬 送出 PR</button>
@@ -1658,6 +1703,104 @@ async function apSendPR(family) {
 async function apMarkMerged(family) {
   if (!confirm(`確認 ${family} 的 PR 已 merge？`)) return;
   await fetch(`/api/auto-pipeline/families/${family}/pr/merged`, { method: 'POST' });
+}
+
+// ── Rules Review Modal ──
+async function apShowRules(family) {
+  document.getElementById('rules-modal-title').textContent = `規則審查 — ${family}`;
+  document.getElementById('rules-list').innerHTML = '<div style="padding:16px;color:var(--text2)">載入中…</div>';
+  document.getElementById('rules-detail').innerHTML = '<div style="color:var(--text2);padding:16px;">← 選擇一條規則查看詳情</div>';
+  document.getElementById('rules-modal').classList.add('open');
+  try {
+    const res = await fetch(`/api/auto-pipeline/families/${encodeURIComponent(family)}/rules`);
+    const data = await res.json();
+    const rules = data.rules || [];
+    if (!rules.length) {
+      document.getElementById('rules-list').innerHTML = '<div style="padding:16px;color:var(--text2)">找不到規則</div>';
+      return;
+    }
+    document.getElementById('rules-list').innerHTML = rules.map(r => {
+      const score = r.score != null ? r.score : '—';
+      const sc = r.score == null ? 'zero' : r.score > 0 ? 'pos' : r.score < 0 ? 'neg' : 'zero';
+      return `<div class="rule-item" id="ri-${CSS.escape(r.name)}" onclick="apViewRule('${family}','${r.name}',this)">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span class="rule-item-name">${r.name}</span>
+          <span class="rule-score ${sc}">${typeof score==='number'?score.toFixed(3):score}</span>
+        </div>
+        <div class="rule-item-crime">${r.crime || '<span style="color:var(--text2)">（無描述）</span>'}</div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('rules-list').innerHTML = `<div style="padding:16px;color:var(--danger)">載入失敗：${e}</div>`;
+  }
+}
+
+async function apViewRule(family, ruleName, el) {
+  document.querySelectorAll('.rule-item').forEach(e => e.classList.remove('active'));
+  if (el) el.classList.add('active');
+  document.getElementById('rules-detail').innerHTML = '<div style="color:var(--text2)">載入中…</div>';
+  try {
+    const res = await fetch(`/api/auto-pipeline/families/${encodeURIComponent(family)}/rules/${encodeURIComponent(ruleName)}`);
+    const data = await res.json();
+    const c = data.content || {};
+    const score = c.score != null ? c.score : '—';
+    const sc = c.score == null ? 'zero' : c.score > 0 ? 'pos' : c.score < 0 ? 'neg' : 'zero';
+    const labels = Array.isArray(c.label) ? c.label : (c.label ? [c.label] : []);
+    const apis = Array.isArray(c.api) ? c.api : [];
+    const checkItem = Array.isArray(c.check_item) ? c.check_item : [];
+
+    let html = `
+      <div class="rule-detail-field">
+        <label>規則檔案</label>
+        <pre>${ruleName}</pre>
+      </div>
+      <div class="rule-detail-field">
+        <label>優化分數 (score)</label>
+        <span class="rule-score ${sc}" style="font-size:16px;">${typeof score==='number'?score.toFixed(4):score}</span>
+      </div>
+      <div class="rule-detail-field">
+        <label>犯罪描述 (crime)</label>
+        <pre>${c.crime || '（未設定）'}</pre>
+      </div>
+      <div class="rule-detail-field">
+        <label>標籤 (label)</label>
+        <div>${labels.length ? labels.map(l=>`<span class="tag">${l}</span>`).join('') : '（未設定）'}</div>
+      </div>`;
+
+    if (apis.length) {
+      html += `<div class="rule-detail-field">
+        <label>API 呼叫序列</label>
+        ${apis.map((a,i)=>`<div style="margin-bottom:6px;"><b>Step ${i+1}:</b><br>
+          <span style="color:var(--accent)">${a.class || ''}</span> → <b>${a.method || ''}</b><br>
+          <span style="color:var(--text2);font-size:11px;">${a.descriptor || ''}</span>
+        </div>`).join('')}
+      </div>`;
+    }
+
+    if (checkItem.length) {
+      html += `<div class="rule-detail-field">
+        <label>分析階段 (check_item) — ${checkItem.filter(Boolean).length}/${checkItem.length} 通過</label>
+        <div class="stage-bar">
+          ${checkItem.map((v,i)=>`<div class="stage-dot ${v?'pass':'fail'}" title="Stage ${i+1}">${i+1}</div>`).join('')}
+        </div>
+      </div>`;
+    }
+
+    // Full raw JSON
+    html += `<div class="rule-detail-field">
+      <label>完整 JSON</label>
+      <pre style="background:var(--surface2);padding:10px;border-radius:6px;border:1px solid var(--border);max-height:200px;overflow-y:auto;">${JSON.stringify(c, null, 2)}</pre>
+    </div>`;
+
+    document.getElementById('rules-detail').innerHTML = html;
+  } catch(e) {
+    document.getElementById('rules-detail').innerHTML = `<div style="color:var(--danger)">載入失敗：${e}</div>`;
+  }
+}
+
+function closeRulesModal(e) {
+  if (e && e.target !== document.getElementById('rules-modal')) return;
+  document.getElementById('rules-modal').classList.remove('open');
 }
 
 // Auto-refresh Auto Pipeline page every 5 seconds

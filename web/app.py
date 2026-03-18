@@ -48,6 +48,9 @@ MANAGED_KEYS = [
     "GENERATE_RULES_MAX_APIS",
     "MIN_SAMPLES",
     "MAX_APK_DOWNLOAD",
+    "TRAIN_SAMPLE_COUNT",
+    "QUARK_RULES_FOLDER",
+    "QUARK_RULES_START_INDEX",
 ]
 
 ENV_FILE = Path(__file__).parent.parent / ".env"
@@ -238,6 +241,7 @@ def _run_script(job_id: str, cmd: list[str], cwd: str, env: dict | None = None):
         pipeline_processes[job_id]["error"] = str(e)
     finally:
         pipeline_processes[job_id]["finished_at"] = datetime.now().isoformat()
+        _save_completed_job(job_id)
 
 
 @app.post("/api/pipeline/train")
@@ -577,6 +581,7 @@ def browse_directory(path: str = "~"):
 # ──────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent.parent
 AUTO_STATE_FILE = PROJECT_ROOT / "data" / "auto_pipeline_state.json"
+JOBS_FILE      = PROJECT_ROOT / "data" / "jobs_history.json"
 _state_lock = threading.Lock()
 _family_states: dict[str, dict] = {}
 _DEFAULT_MIN_SAMPLES = 10
@@ -602,6 +607,42 @@ class FS:
     PR_MERGED    = "pr_merged"
 
 
+def _load_jobs():
+    """Load completed job history from disk into pipeline_processes on startup."""
+    if not JOBS_FILE.exists():
+        return
+    try:
+        data = json.loads(JOBS_FILE.read_text())
+        for job_id, info in data.items():
+            if job_id not in pipeline_processes:
+                pipeline_processes[job_id] = info
+    except Exception as e:
+        print(f"[jobs] Failed to load job history: {e}")
+
+
+def _save_completed_job(job_id: str):
+    """Persist a completed job's metadata + last 100 log lines to disk."""
+    info = pipeline_processes.get(job_id, {})
+    try:
+        existing: dict = {}
+        if JOBS_FILE.exists():
+            existing = json.loads(JOBS_FILE.read_text())
+        existing[job_id] = {
+            k: v for k, v in info.items()
+            if k in ("status", "type", "cmd", "started_at", "finished_at", "returncode", "pid", "error")
+        }
+        existing[job_id]["logs"] = info.get("logs", [])[-100:]
+        # Keep only the most recent 100 jobs
+        if len(existing) > 100:
+            by_time = sorted(existing.keys(), key=lambda k: existing[k].get("started_at", ""))
+            for old_key in by_time[:len(existing) - 100]:
+                del existing[old_key]
+        JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        JOBS_FILE.write_text(json.dumps(existing, indent=2, default=str))
+    except Exception as e:
+        print(f"[jobs] Failed to save job {job_id}: {e}")
+
+
 def _load_family_states():
     global _family_states
     if AUTO_STATE_FILE.exists():
@@ -609,6 +650,15 @@ def _load_family_states():
             _family_states = json.loads(AUTO_STATE_FILE.read_text())
         except Exception:
             _family_states = {}
+    # Reset any families stuck in ANALYZING/QUEUED due to server crash/restart
+    changed = False
+    for family, state in _family_states.items():
+        if state.get("status") in (FS.ANALYZING, FS.QUEUED):
+            state["status"] = FS.READY
+            state["error"] = "分析中斷（伺服器重啟），可重新加入佇列繼續"
+            changed = True
+    if changed:
+        _save_family_states()
 
 
 def _save_family_states():
@@ -663,6 +713,7 @@ def _run_script_with_stdin(job_id: str, cmd: list, cwd: str, stdin_input: str = 
         pipeline_processes[job_id]["error"] = str(e)
     finally:
         pipeline_processes[job_id]["finished_at"] = datetime.now().isoformat()
+        _save_completed_job(job_id)
 
 
 # ── Background: Search + Download ──
@@ -801,6 +852,108 @@ def _safe_name(name: str) -> str:
     return re.sub(r'[^\w\-.]', '_', name).strip('_') or "unknown"
 
 
+def _make_train_csv(family: str, csv_path: str, safe_family: str, analysis_env: dict) -> str:
+    """Return a (possibly truncated) CSV path for training based on TRAIN_SAMPLE_COUNT."""
+    limit = int(analysis_env.get("TRAIN_SAMPLE_COUNT", "10"))
+    if limit <= 0:
+        return csv_path  # 0 = unlimited
+    try:
+        rows = Path(csv_path).read_text().splitlines()
+        total = len(rows) - 1  # exclude header
+        if total <= limit:
+            return csv_path  # already within limit
+        header = rows[0]
+        selected = rows[1:limit + 1]
+        out = PROJECT_ROOT / "data" / "lists" / "family" / f"{safe_family}_train_{limit}.csv"
+        out.write_text("\n".join([header] + selected) + "\n")
+        _append_log(family, f"Training using {limit}/{total} sample(s) (TRAIN_SAMPLE_COUNT={limit}).")
+        return str(out)
+    except Exception as e:
+        _append_log(family, f"⚠ Could not limit training samples ({e}), using full CSV.")
+        return csv_path
+
+
+def _run_post_train_steps(
+    family: str,
+    pred_csv: Path,
+    rules_dir: Path,
+    rules_count: int,
+    python_cmd: list,
+    analysis_env: dict,
+    complete_msg: str,
+) -> None:
+    """Run apply_rule_info and copy_rule_to_quark_rules after weight adjustment, then set COMPLETED."""
+    safe_family = _safe_name(family)
+
+    # Step 3: Apply optimized scores back to rule JSON files
+    _append_log(family, "=== Step 3: Applying optimized scores to rule files ===")
+    rule_review_csv = PROJECT_ROOT / "data" / "lists" / "family" / f"{safe_family}_rule_review.csv"
+    if not rule_review_csv.exists():
+        rule_review_csv.parent.mkdir(parents=True, exist_ok=True)
+        rule_review_csv.write_text("rule,description,label\n")
+        _append_log(family, "  (No rule_review.csv found — descriptions/labels will not be applied)")
+    apply_job = f"autoapply_{family}_{datetime.now().strftime('%H%M%S')}"
+    pipeline_processes[apply_job] = {"status": "pending", "logs": [], "type": "auto_apply"}
+    apply_cmd = python_cmd + [
+        str(PROJECT_ROOT / "tools" / "apply_rule_info.py"),
+        "--apk_prediction", str(pred_csv),
+        "--rule_info", str(rule_review_csv),
+        "--rule_base_folder", str(rules_dir),
+    ]
+    _run_script(apply_job, apply_cmd, str(PROJECT_ROOT), env=analysis_env)
+    _set_family(family, apply_job_id=apply_job)
+    if pipeline_processes[apply_job].get("returncode", 1) != 0:
+        _flush_job_logs_to_family(family, apply_job, prefix="  ")
+        rc = pipeline_processes[apply_job].get("returncode", "?")
+        _append_log(family, f"⚠ Apply rule scores failed (exit {rc}) — scores not written to rule files.")
+    else:
+        _append_log(family, "✅ Rule scores applied to JSON files.")
+
+    # Step 4: Copy rules to quark-rules folder (if QUARK_RULES_FOLDER is configured)
+    quark_rules_folder_str = analysis_env.get("QUARK_RULES_FOLDER", "").strip()
+    if quark_rules_folder_str:
+        quark_rules_folder = Path(quark_rules_folder_str)
+        if quark_rules_folder.exists():
+            _append_log(family, "=== Step 4: Copying rules to quark-rules folder ===")
+            rule_names = [r.name for r in sorted(rules_dir.glob("*.json"))]
+            rule_list_csv = PROJECT_ROOT / "data" / "lists" / "family" / f"{safe_family}_rule_list.csv"
+            rule_list_csv.write_text("rule\n" + "\n".join(rule_names) + "\n")
+            existing_jsons = [p for p in (quark_rules_folder / "rules").glob("*.json") if p.stem.isdigit()]
+            start_index = (max(int(p.stem) for p in existing_jsons) + 1) if existing_jsons \
+                else int(analysis_env.get("QUARK_RULES_START_INDEX", "1"))
+            copy_job = f"autocopy_{family}_{datetime.now().strftime('%H%M%S')}"
+            pipeline_processes[copy_job] = {"status": "pending", "logs": [], "type": "auto_copy"}
+            copy_cmd = python_cmd + [
+                str(PROJECT_ROOT / "tools" / "copy_rule_to_quark_rules.py"),
+                "--rule_list", str(rule_list_csv),
+                "--rule_base_folder", str(rules_dir),
+                "--quark_rule_folder", str(quark_rules_folder),
+                "--start_index", str(start_index),
+            ]
+            _run_script(copy_job, copy_cmd, str(PROJECT_ROOT), env=analysis_env)
+            _set_family(family, copy_job_id=copy_job)
+            if pipeline_processes[copy_job].get("returncode", 1) != 0:
+                _flush_job_logs_to_family(family, copy_job, prefix="  ")
+                rc = pipeline_processes[copy_job].get("returncode", "?")
+                _append_log(family, f"⚠ Copy rules to quark-rules failed (exit {rc}).")
+            else:
+                _append_log(family, f"✅ Rules copied to {quark_rules_folder_str}.")
+        else:
+            _append_log(family, f"⚠ QUARK_RULES_FOLDER '{quark_rules_folder_str}' not found — skipping copy.")
+    else:
+        _append_log(family, "ℹ QUARK_RULES_FOLDER not configured — skipping copy to quark-rules.")
+
+    _append_log(family, complete_msg)
+    _set_family(
+        family,
+        status=FS.COMPLETED,
+        rules_path=str(rules_dir),
+        prediction_csv=str(pred_csv),
+        rules_count=rules_count,
+        error=None,
+    )
+
+
 def _run_analysis(family: str, skip_rule_gen: bool = False):
     info = _family_states.get(family, {})
     csv_path    = info.get("csv_path", "")
@@ -856,7 +1009,8 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
         _append_log(family, f"Found {rules_count} existing rules.")
         # Jump directly to Step 2
         _append_log(family, "=== Step 2: Adjusting rule weights ===")
-        apk_lists = [csv_path]
+        train_csv = _make_train_csv(family, csv_path, safe_family, analysis_env)
+        apk_lists = [train_csv]
         if benign_list and Path(benign_list).exists():
             apk_lists.append(benign_list)
         else:
@@ -881,9 +1035,8 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
             _append_log(family, f"❌ Weight adjustment failed (exit code {rc}).")
             _set_family(family, status=FS.READY, error=f"Weight adjustment failed (exit {rc})")
             return
-        _append_log(family, f"✅ Re-training complete! Weights written to {pred_csv.name}.")
-        _set_family(family, status=FS.COMPLETED, rules_path=str(rules_dir),
-                    prediction_csv=str(pred_csv), rules_count=rules_count, error=None)
+        _run_post_train_steps(family, pred_csv, rules_dir, rules_count, python_cmd, analysis_env,
+                              f"✅ Re-training complete! {rules_count} rules ready.")
         return
 
     # Step 1: Generate rules — use only N samples (default 1) to keep it fast
@@ -931,7 +1084,8 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
 
     # Step 2: Adjust weights
     _append_log(family, "=== Step 2: Adjusting rule weights ===")
-    apk_lists = [csv_path]
+    train_csv = _make_train_csv(family, csv_path, safe_family, analysis_env)
+    apk_lists = [train_csv]
     if benign_list and Path(benign_list).exists():
         apk_lists.append(benign_list)
         _append_log(family, f"Including benign list: {benign_list}")
@@ -961,15 +1115,8 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
         _set_family(family, status=FS.READY, error=f"Weight adjustment failed (exit {rc})")
         return
 
-    _append_log(family, f"✅ Analysis complete! {rules_count} rules, weights written to {pred_csv.name}.")
-    _set_family(
-        family,
-        status=FS.COMPLETED,
-        rules_path=str(rules_dir),
-        prediction_csv=str(pred_csv),
-        rules_count=rules_count,
-        error=None,
-    )
+    _run_post_train_steps(family, pred_csv, rules_dir, rules_count, python_cmd, analysis_env,
+                          f"✅ Analysis complete! {rules_count} rules, weights applied.")
 
 
 def _analysis_wrapper(family: str):
@@ -1021,6 +1168,7 @@ def _queue_monitor():
 
 
 _load_family_states()
+_load_jobs()
 threading.Thread(target=_queue_monitor, daemon=True).start()
 
 
@@ -1093,6 +1241,47 @@ def enqueue_family(family: str):
         raise HTTPException(status_code=400, detail="Family must be READY to enqueue")
     _set_family(family, status=FS.QUEUED, queued_at=datetime.now().isoformat())
     return {"family": family, "status": FS.QUEUED}
+
+
+@app.get("/api/auto-pipeline/families/{family}/rules")
+def list_family_rules(family: str):
+    """List all rules for a family with score/crime/label metadata."""
+    if family not in _family_states:
+        raise HTTPException(status_code=404, detail="Family not found")
+    safe_family = _safe_name(family)
+    rules_dir = PROJECT_ROOT / "data" / "rules" / safe_family
+    if not rules_dir.exists():
+        return {"family": family, "rules": [], "count": 0}
+    rules = []
+    for rule_path in sorted(rules_dir.glob("*.json")):
+        try:
+            content = json.loads(rule_path.read_text())
+            rules.append({
+                "name": rule_path.name,
+                "score": content.get("score"),
+                "crime": content.get("crime", ""),
+                "label": content.get("label", []),
+            })
+        except Exception:
+            rules.append({"name": rule_path.name, "score": None, "crime": "", "label": []})
+    rules.sort(key=lambda r: (r["score"] is None, -(r["score"] or 0)))
+    return {"family": family, "rules": rules, "count": len(rules)}
+
+
+@app.get("/api/auto-pipeline/families/{family}/rules/{rule_name}")
+def get_family_rule(family: str, rule_name: str):
+    """Get full JSON content of a single rule."""
+    if family not in _family_states:
+        raise HTTPException(status_code=404, detail="Family not found")
+    safe_family = _safe_name(family)
+    rule_path = PROJECT_ROOT / "data" / "rules" / safe_family / rule_name
+    if not rule_path.exists():
+        raise HTTPException(status_code=404, detail="Rule not found")
+    try:
+        content = json.loads(rule_path.read_text())
+        return {"name": rule_name, "content": content}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read rule: {e}")
 
 
 @app.post("/api/auto-pipeline/families/{family}/pr")
