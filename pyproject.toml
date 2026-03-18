@@ -36,7 +36,7 @@ dependencies = [
 ]
 
 [tool.uv]
-environments = ["sys_platform == 'linux'"]
+environments = ["sys_platform == 'linux'", "sys_platform == 'darwin'"]
 
 [tool.uv.sources]
 quark-engine = { path = "../quark-engine" }

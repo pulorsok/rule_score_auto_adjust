@@ -210,8 +210,19 @@ def check_androzoo(sha256: str):
 # ──────────────────────────────────────────────
 # Pipeline management endpoints
 # ──────────────────────────────────────────────
-def _run_script(job_id: str, cmd: list[str], cwd: str, env: dict | None = None):
-    """Run a script as a subprocess and record its output."""
+def _append_log_mem(family: str, line: str):
+    """Append a line to family log in memory only (no disk save). Call _save_family_states() separately."""
+    ts = datetime.now().strftime("%H:%M:%S")
+    with _state_lock:
+        flog = _family_states.get(family, {}).get("log", [])
+        flog.append(f"[{ts}] {line}")
+        _family_states[family]["log"] = flog[-300:]
+
+
+def _run_script(job_id: str, cmd: list[str], cwd: str, env: dict | None = None, log_family: str | None = None):
+    """Run a script as a subprocess and record its output.
+    If log_family is set, output is also streamed live to the family log.
+    """
     pipeline_processes[job_id]["status"] = "running"
     pipeline_processes[job_id]["started_at"] = datetime.now().isoformat()
     pipeline_processes[job_id]["cmd"] = " ".join(cmd)
@@ -230,10 +241,15 @@ def _run_script(job_id: str, cmd: list[str], cwd: str, env: dict | None = None):
 
         lines = []
         for line in proc.stdout:
-            lines.append(line.rstrip())
+            stripped = line.rstrip()
+            lines.append(stripped)
             pipeline_processes[job_id]["logs"] = lines[-500:]
+            if log_family:
+                _append_log_mem(log_family, stripped)
             if len(lines) % 50 == 0:   # checkpoint every 50 lines
                 _save_completed_job(job_id)
+                if log_family:
+                    _save_family_states()
 
         proc.wait()
         pipeline_processes[job_id]["returncode"] = proc.returncode
@@ -244,6 +260,8 @@ def _run_script(job_id: str, cmd: list[str], cwd: str, env: dict | None = None):
     finally:
         pipeline_processes[job_id]["finished_at"] = datetime.now().isoformat()
         _save_completed_job(job_id)
+        if log_family:
+            _save_family_states()
 
 
 @app.post("/api/pipeline/train")
@@ -695,8 +713,10 @@ def _append_log(family: str, line: str):
         _save_family_states()
 
 
-def _run_script_with_stdin(job_id: str, cmd: list, cwd: str, stdin_input: str = "", env: dict | None = None):
-    """Run a script with piped stdin — used to automate interactive prompts."""
+def _run_script_with_stdin(job_id: str, cmd: list, cwd: str, stdin_input: str = "", env: dict | None = None, log_family: str | None = None):
+    """Run a script with piped stdin — used to automate interactive prompts.
+    If log_family is set, output is also streamed live to the family log.
+    """
     pipeline_processes[job_id]["status"] = "running"
     pipeline_processes[job_id]["started_at"] = datetime.now().isoformat()
     pipeline_processes[job_id]["cmd"] = " ".join(cmd)
@@ -712,10 +732,15 @@ def _run_script_with_stdin(job_id: str, cmd: list, cwd: str, stdin_input: str = 
             proc.stdin.close()
         lines = []
         for line in proc.stdout:
-            lines.append(line.rstrip())
+            stripped = line.rstrip()
+            lines.append(stripped)
             pipeline_processes[job_id]["logs"] = lines[-500:]
+            if log_family:
+                _append_log_mem(log_family, stripped)
             if len(lines) % 50 == 0:   # checkpoint every 50 lines
                 _save_completed_job(job_id)
+                if log_family:
+                    _save_family_states()
         proc.wait()
         pipeline_processes[job_id]["returncode"] = proc.returncode
         pipeline_processes[job_id]["status"] = "done" if proc.returncode == 0 else "failed"
@@ -725,6 +750,8 @@ def _run_script_with_stdin(job_id: str, cmd: list, cwd: str, stdin_input: str = 
     finally:
         pipeline_processes[job_id]["finished_at"] = datetime.now().isoformat()
         _save_completed_job(job_id)
+        if log_family:
+            _save_family_states()
 
 
 # ── Background: Search + Download ──
@@ -911,10 +938,9 @@ def _run_post_train_steps(
         "--rule_info", str(rule_review_csv),
         "--rule_base_folder", str(rules_dir),
     ]
-    _run_script(apply_job, apply_cmd, str(PROJECT_ROOT), env=analysis_env)
+    _run_script(apply_job, apply_cmd, str(PROJECT_ROOT), env=analysis_env, log_family=family)
     _set_family(family, apply_job_id=apply_job)
     if pipeline_processes[apply_job].get("returncode", 1) != 0:
-        _flush_job_logs_to_family(family, apply_job, prefix="  ")
         rc = pipeline_processes[apply_job].get("returncode", "?")
         _append_log(family, f"⚠ Apply rule scores failed (exit {rc}) — scores not written to rule files.")
     else:
@@ -941,10 +967,9 @@ def _run_post_train_steps(
                 "--quark_rule_folder", str(quark_rules_folder),
                 "--start_index", str(start_index),
             ]
-            _run_script(copy_job, copy_cmd, str(PROJECT_ROOT), env=analysis_env)
+            _run_script(copy_job, copy_cmd, str(PROJECT_ROOT), env=analysis_env, log_family=family)
             _set_family(family, copy_job_id=copy_job)
             if pipeline_processes[copy_job].get("returncode", 1) != 0:
-                _flush_job_logs_to_family(family, copy_job, prefix="  ")
                 rc = pipeline_processes[copy_job].get("returncode", "?")
                 _append_log(family, f"⚠ Copy rules to quark-rules failed (exit {rc}).")
             else:
@@ -1021,6 +1046,8 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
     # Inject PYTHONPATH so local modules (data_preprocess, model, etc.) are importable
     existing_pp = analysis_env.get("PYTHONPATH", "")
     analysis_env["PYTHONPATH"] = str(PROJECT_ROOT) + (os.pathsep + existing_pp if existing_pp else "")
+    # Disable Python output buffering so subprocess logs appear in real time
+    analysis_env["PYTHONUNBUFFERED"] = "1"
 
     benign_list = analysis_env.get("BENIGN_APK_LIST", "")
 
@@ -1052,15 +1079,13 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
             train_cmd += ["--apk-list", al]
         train_job = f"autotrain_{family}_{datetime.now().strftime('%H%M%S')}"
         pipeline_processes[train_job] = {"status": "pending", "logs": [], "type": "auto_train"}
-        _run_script_with_stdin(train_job, train_cmd, str(PROJECT_ROOT), stdin_input="c\nc\n", env=analysis_env)
+        _run_script_with_stdin(train_job, train_cmd, str(PROJECT_ROOT), stdin_input="c\nc\n", env=analysis_env, log_family=family)
         _set_family(family, train_job_id=train_job)
         if pipeline_processes[train_job].get("returncode", 1) != 0:
-            _flush_job_logs_to_family(family, train_job, prefix="  ")
             rc = pipeline_processes[train_job].get("returncode", "?")
             _append_log(family, f"❌ Weight adjustment failed (exit code {rc}).")
             _set_family(family, status=FS.READY, error=f"Weight adjustment failed (exit {rc})")
             return
-        _flush_job_logs_to_family(family, train_job, prefix="  [train] ")
         _run_post_train_steps(family, pred_csv, rules_dir, rules_count, python_cmd, analysis_env,
                               f"✅ Re-training complete! {rules_count} rules ready.")
         return
@@ -1089,11 +1114,11 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
          "-a", gen_csv_path, "-w", str(working_dir), "-o", str(rules_dir)],
         str(PROJECT_ROOT),
         env=analysis_env,
+        log_family=family,
     )
     _set_family(family, gen_job_id=gen_job)
 
     if pipeline_processes[gen_job].get("returncode", 1) != 0:
-        _flush_job_logs_to_family(family, gen_job, prefix="  ")
         rc = pipeline_processes[gen_job].get("returncode", "?")
         _append_log(family, f"❌ Rule generation failed (exit code {rc}).")
         _set_family(family, status=FS.READY, error=f"Rule generation failed (exit {rc})")
@@ -1131,17 +1156,14 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
 
     train_job = f"autotrain_{family}_{datetime.now().strftime('%H%M%S')}"
     pipeline_processes[train_job] = {"status": "pending", "logs": [], "type": "auto_train"}
-    _run_script_with_stdin(train_job, train_cmd, str(PROJECT_ROOT), stdin_input="c\nc\n", env=analysis_env)
+    _run_script_with_stdin(train_job, train_cmd, str(PROJECT_ROOT), stdin_input="c\nc\n", env=analysis_env, log_family=family)
     _set_family(family, train_job_id=train_job)
 
     if pipeline_processes[train_job].get("returncode", 1) != 0:
-        _flush_job_logs_to_family(family, train_job, prefix="  ")
         rc = pipeline_processes[train_job].get("returncode", "?")
         _append_log(family, f"❌ Weight adjustment failed (exit code {rc}).")
         _set_family(family, status=FS.READY, error=f"Weight adjustment failed (exit {rc})")
         return
-
-    _flush_job_logs_to_family(family, train_job, prefix="  [train] ")
     _run_post_train_steps(family, pred_csv, rules_dir, rules_count, python_cmd, analysis_env,
                           f"✅ Analysis complete! {rules_count} rules, weights applied.")
 
@@ -1460,6 +1482,210 @@ def restart_train(family: str):
     _append_log(family, "🔄 Restarting from Stage 4: weight adjustment only…")
     threading.Thread(target=_analysis_wrapper_train_only, args=(family,), daemon=True).start()
     return {"family": family, "status": FS.ANALYZING}
+
+
+# ──────────────────────────────────────────────
+# Test Analysis
+# ──────────────────────────────────────────────
+
+@app.get("/api/test/resources")
+def get_test_resources():
+    """List available APK CSV lists and rule folders for test analysis."""
+    # Scan locations for APK CSV files
+    csv_search_roots = [
+        PROJECT_ROOT / "data" / "lists",
+        PROJECT_ROOT,  # project-root level (demo files like maliciousAPKs_test.csv)
+    ]
+    # Scan locations for rule folders
+    rule_search_roots = [
+        PROJECT_ROOT / "data" / "rules",
+        PROJECT_ROOT,  # project-root level (demo folder like test_rules/)
+    ]
+
+    def count_rows(csv_file: Path) -> int:
+        try:
+            with open(csv_file) as f:
+                return max(0, sum(1 for _ in f) - 1)
+        except Exception:
+            return 0
+
+    seen_csv: set[str] = set()
+    apk_lists = []
+    for root in csv_search_roots:
+        if not root.exists():
+            continue
+        # For project root, only look at direct *.csv files (not recursive)
+        glob = root.glob("*.csv") if root == PROJECT_ROOT else root.rglob("*.csv")
+        for csv_file in sorted(glob):
+            rel = str(csv_file.relative_to(PROJECT_ROOT))
+            if rel in seen_csv:
+                continue
+            seen_csv.add(rel)
+            # Only include CSVs that have a 'sha256' column header
+            try:
+                with open(csv_file) as f:
+                    header = f.readline().strip().lower()
+                if "sha256" not in header:
+                    continue
+            except Exception:
+                continue
+            demo = csv_file.parent == PROJECT_ROOT
+            apk_lists.append({"name": csv_file.name, "path": rel, "rows": count_rows(csv_file), "demo": demo})
+
+    seen_dirs: set[str] = set()
+    rule_folders = []
+    for root in rule_search_roots:
+        if not root.exists():
+            continue
+        for folder in sorted(root.iterdir()):
+            if not folder.is_dir():
+                continue
+            count = len(list(folder.glob("*.json")))
+            if count == 0:
+                continue
+            rel = str(folder.relative_to(PROJECT_ROOT))
+            if rel in seen_dirs:
+                continue
+            seen_dirs.add(rel)
+            demo = folder.parent == PROJECT_ROOT
+            rule_folders.append({"name": folder.name, "path": rel, "count": count, "demo": demo})
+
+    return {"apk_lists": apk_lists, "rule_folders": rule_folders}
+
+
+class TestRunRequest(BaseModel):
+    apk_lists: list[str]
+    rule_folders: list[str]
+    output_name: str = ""
+    use_cache: bool = True
+
+
+@app.post("/api/test/run")
+def run_test_analysis(req: TestRunRequest):
+    """Run analyze_apk.py on selected APK lists and rule folders."""
+    if not req.apk_lists:
+        raise HTTPException(status_code=400, detail="至少選擇一個 APK 清單")
+    if not req.rule_folders:
+        raise HTTPException(status_code=400, detail="至少選擇一個規則資料夾")
+
+    def resolve(p: str) -> Path:
+        path = Path(p)
+        return (PROJECT_ROOT / path).resolve() if not path.is_absolute() else path.resolve()
+
+    apk_list_paths = [resolve(p) for p in req.apk_lists]
+    rule_folder_paths = [resolve(p) for p in req.rule_folders]
+
+    for p in apk_list_paths:
+        if not p.exists():
+            raise HTTPException(status_code=400, detail=f"找不到 APK 清單: {p}")
+    for p in rule_folder_paths:
+        if not p.exists():
+            raise HTTPException(status_code=400, detail=f"找不到規則資料夾: {p}")
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_name = (req.output_name.strip() or f"test_{ts}").replace(" ", "_")
+    output_dir = PROJECT_ROOT / "data" / "test_results" / out_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    python_cmd = _get_analysis_python()
+    cmd = python_cmd + [str(PROJECT_ROOT / "tools" / "analyze_apk.py")]
+    for p in apk_list_paths:
+        cmd += ["-a", str(p)]
+    for p in rule_folder_paths:
+        cmd += ["-r", str(p)]
+    cmd += ["-o", str(output_dir)]
+    if not req.use_cache:
+        cmd += ["--no-cache"]
+
+    analysis_env = os.environ.copy()
+    if ENV_FILE.exists():
+        for k, v in dotenv.dotenv_values(ENV_FILE).items():
+            if v is not None:
+                analysis_env[k] = v
+    existing_pp = analysis_env.get("PYTHONPATH", "")
+    analysis_env["PYTHONPATH"] = str(PROJECT_ROOT) + (os.pathsep + existing_pp if existing_pp else "")
+    analysis_env["PYTHONUNBUFFERED"] = "1"
+
+    job_id = f"test_{ts}"
+    pipeline_processes[job_id] = {
+        "status": "pending", "logs": [], "type": "test_analysis",
+        "output_dir": str(output_dir),
+    }
+    asyncio.get_event_loop().run_in_executor(None, _run_script, job_id, cmd, str(PROJECT_ROOT), analysis_env)
+    return {"job_id": job_id, "output_dir": str(output_dir)}
+
+
+@app.get("/api/test/result/{job_id}")
+def get_test_result(job_id: str):
+    """Read combined output CSVs from a completed test analysis job."""
+    if job_id not in pipeline_processes:
+        raise HTTPException(status_code=404, detail="Job not found")
+    info = pipeline_processes[job_id]
+    output_dir = Path(info.get("output_dir", ""))
+    if not output_dir.exists():
+        return {"rows": [], "columns": [], "message": "結果尚未生成"}
+    try:
+        import csv
+        all_rows = []
+        columns: list[str] = []
+        for csv_file in sorted(output_dir.rglob("*.csv")):
+            with open(csv_file, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                if not columns and reader.fieldnames:
+                    columns = list(reader.fieldnames)
+                for row in reader:
+                    all_rows.append(dict(row))
+                    if len(all_rows) >= 2000:
+                        break
+            if len(all_rows) >= 2000:
+                break
+        return {"rows": all_rows, "columns": columns, "total": len(all_rows)}
+    except Exception as e:
+        return {"rows": [], "columns": [], "message": str(e)}
+
+
+@app.get("/api/test/history-result")
+def get_test_history_result(name: str):
+    """Read combined output CSVs from a named test result directory."""
+    results_root = PROJECT_ROOT / "data" / "test_results"
+    output_dir = (results_root / name).resolve()
+    # Safety: ensure it's within test_results
+    if not str(output_dir).startswith(str(results_root)):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not output_dir.exists():
+        return {"rows": [], "columns": [], "message": "結果目錄不存在"}
+    try:
+        import csv
+        all_rows = []
+        columns: list[str] = []
+        for csv_file in sorted(output_dir.rglob("*.csv")):
+            with open(csv_file, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                if not columns and reader.fieldnames:
+                    columns = list(reader.fieldnames)
+                for row in reader:
+                    all_rows.append(dict(row))
+                    if len(all_rows) >= 2000:
+                        break
+            if len(all_rows) >= 2000:
+                break
+        return {"rows": all_rows, "columns": columns, "total": len(all_rows)}
+    except Exception as e:
+        return {"rows": [], "columns": [], "message": str(e)}
+
+
+@app.get("/api/test/history")
+def get_test_history():
+    """List past test result directories."""
+    results_root = PROJECT_ROOT / "data" / "test_results"
+    if not results_root.exists():
+        return {"results": []}
+    items = []
+    for d in sorted(results_root.iterdir(), reverse=True):
+        if d.is_dir():
+            csv_count = len(list(d.rglob("*.csv")))
+            items.append({"name": d.name, "csv_count": csv_count})
+    return {"results": items[:50]}
 
 
 # ──────────────────────────────────────────────

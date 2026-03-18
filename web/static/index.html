@@ -215,6 +215,9 @@
     <a onclick="showPage('jobs')" id="nav-jobs">
       <span class="icon">📋</span> Jobs
     </a>
+    <a onclick="showPage('test')" id="nav-test">
+      <span class="icon">🧪</span> 測試分析
+    </a>
     <a onclick="showPage('settings')" id="nav-settings" style="margin-top:auto;">
       <span class="icon">🔑</span> Settings
     </a>
@@ -422,6 +425,80 @@
       </div>
     </div>
 
+    <!-- ── Test Analysis ── -->
+    <div class="page" id="page-test">
+      <h1>🧪 測試分析</h1>
+      <div class="subtitle">選擇 APK 清單與規則資料夾，執行 analyze_apk.py 測試規則命中率</div>
+
+      <!-- Config card -->
+      <div class="card">
+        <div class="card-title">設定</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px;">
+
+          <!-- APK Lists -->
+          <div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;font-weight:600;">APK 清單 <span id="test-apk-badge" class="badge badge-gray" style="margin-left:4px;">載入中</span></div>
+            <input id="test-apk-filter" placeholder="篩選…" style="width:100%;margin-bottom:6px;" oninput="filterTestList('apk')" />
+            <div id="test-apk-list" style="max-height:200px;overflow-y:auto;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px;"></div>
+          </div>
+
+          <!-- Rule Folders -->
+          <div>
+            <div style="font-size:12px;color:var(--text2);margin-bottom:6px;font-weight:600;">規則資料夾 <span id="test-rule-badge" class="badge badge-gray" style="margin-left:4px;">載入中</span></div>
+            <input id="test-rule-filter" placeholder="篩選…" style="width:100%;margin-bottom:6px;" oninput="filterTestList('rule')" />
+            <div id="test-rule-list" style="max-height:200px;overflow-y:auto;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px;"></div>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="field">
+            <label>輸出名稱（選填，留空自動產生）</label>
+            <input id="test-output-name" class="input-wide" placeholder="test_alien_rules" />
+          </div>
+          <div class="field" style="justify-content:flex-end;">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:6px;">
+              <input type="checkbox" id="test-use-cache" checked /> 使用快取
+            </label>
+            <button class="btn btn-primary" id="test-run-btn" onclick="runTestAnalysis()">▶ 執行分析</button>
+          </div>
+        </div>
+        <div id="test-run-result" class="text-sm" style="margin-top:6px;"></div>
+      </div>
+
+      <!-- History -->
+      <div class="card" id="test-history-card" style="display:none;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div class="card-title" style="margin:0;">歷史結果</div>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="loadTestHistory()">🔄 重新整理</button>
+        </div>
+        <div id="test-history-list"></div>
+      </div>
+
+      <!-- Live log -->
+      <div class="card" id="test-log-card" style="display:none;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div class="card-title" style="margin:0;">執行 Log <span id="test-log-status"></span></div>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="testScrollLog()">⬇ 捲到底</button>
+        </div>
+        <div class="log-box" id="test-log-box"><span class="log-empty">等待輸出…</span></div>
+      </div>
+
+      <!-- Results table -->
+      <div class="card" id="test-result-card" style="display:none;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div class="card-title" style="margin:0;">分析結果 <span id="test-result-count" class="badge badge-blue"></span></div>
+          <input id="test-result-filter" placeholder="篩選 SHA256 / 規則名稱…" style="width:240px;" oninput="filterTestResults()" />
+        </div>
+        <div class="table-wrap">
+          <table id="test-result-table">
+            <thead id="test-result-thead"></thead>
+            <tbody id="test-result-tbody"></tbody>
+          </table>
+        </div>
+        <div id="test-result-msg" class="text-sm" style="margin-top:8px;color:var(--text2);"></div>
+      </div>
+    </div>
+
     <!-- ── Auto Pipeline ── -->
     <div class="page active" id="page-auto-pipeline">
       <h1>Auto Pipeline</h1>
@@ -565,6 +642,7 @@ function showPage(name) {
   if (name === 'jobs') loadJobs();
   if (name === 'settings') loadSettings();
   if (name === 'auto-pipeline') { _apPythonChecked = false; apLoad(); }
+  if (name === 'test') loadTestResources();
 }
 
 // ── Config ──
@@ -1801,6 +1879,227 @@ async function apViewRule(family, ruleName, el) {
 function closeRulesModal(e) {
   if (e && e.target !== document.getElementById('rules-modal')) return;
   document.getElementById('rules-modal').classList.remove('open');
+}
+
+// ── Test Analysis ──────────────────────────────────────────────────────
+let _testApkData = [];
+let _testRuleData = [];
+let _testResultData = [];
+let _testJobId = null;
+let _testPollTimer = null;
+
+async function loadTestResources() {
+  try {
+    const r = await fetch('/api/test/resources');
+    const d = await r.json();
+    _testApkData = d.apk_lists || [];
+    _testRuleData = d.rule_folders || [];
+    document.getElementById('test-apk-badge').textContent = _testApkData.length + ' 個';
+    document.getElementById('test-rule-badge').textContent = _testRuleData.length + ' 個';
+    renderTestList('apk');
+    renderTestList('rule');
+    // Auto-check demo files
+    setTimeout(() => {
+      document.querySelectorAll('#test-apk-list input[type=checkbox]').forEach(cb => {
+        const item = _testApkData.find(i => i.path === cb.dataset.path);
+        if (item && item.demo) cb.checked = true;
+      });
+      document.querySelectorAll('#test-rule-list input[type=checkbox]').forEach(cb => {
+        const item = _testRuleData.find(i => i.path === cb.dataset.path);
+        if (item && item.demo) cb.checked = true;
+      });
+    }, 50);
+  } catch(e) {
+    document.getElementById('test-apk-list').innerHTML = '<div style="color:var(--danger);font-size:12px;padding:4px;">載入失敗</div>';
+  }
+  loadTestHistory();
+}
+
+function renderTestList(type) {
+  const filter = document.getElementById('test-' + type + '-filter').value.toLowerCase();
+  const data = type === 'apk' ? _testApkData : _testRuleData;
+  const el = document.getElementById('test-' + type + '-list');
+  const items = data.filter(i => i.name.toLowerCase().includes(filter) || i.path.toLowerCase().includes(filter));
+  if (!items.length) {
+    el.innerHTML = '<div style="color:var(--text2);font-size:12px;padding:4px;">無符合項目</div>';
+    return;
+  }
+  el.innerHTML = items.map(i => {
+    const sub = type === 'apk' ? i.rows + ' 筆' : i.count + ' 個規則';
+    const demoTag = i.demo ? '<span style="font-size:10px;background:rgba(79,142,247,.2);color:var(--accent);border-radius:3px;padding:1px 5px;flex-shrink:0;">demo</span>' : '';
+    return `<label style="display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:4px;cursor:pointer;font-size:12px;" onmouseover="this.style.background='var(--border)'" onmouseout="this.style.background=''">
+      <input type="checkbox" data-path="${i.path}" style="width:14px;height:14px;flex-shrink:0;" />
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${i.path}">${i.name}</span>
+      ${demoTag}
+      <span style="color:var(--text2);font-size:11px;flex-shrink:0;">${sub}</span>
+    </label>`;
+  }).join('');
+}
+
+function filterTestList(type) { renderTestList(type); }
+
+function getCheckedPaths(type) {
+  const el = document.getElementById('test-' + type + '-list');
+  return Array.from(el.querySelectorAll('input[type=checkbox]:checked')).map(cb => cb.dataset.path);
+}
+
+async function runTestAnalysis() {
+  const apkLists = getCheckedPaths('apk');
+  const ruleFolders = getCheckedPaths('rule');
+  const resultEl = document.getElementById('test-run-result');
+  if (!apkLists.length) { resultEl.textContent = '⚠ 請選擇至少一個 APK 清單'; resultEl.style.color = 'var(--warn)'; return; }
+  if (!ruleFolders.length) { resultEl.textContent = '⚠ 請選擇至少一個規則資料夾'; resultEl.style.color = 'var(--warn)'; return; }
+
+  const btn = document.getElementById('test-run-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ 執行中…';
+  resultEl.textContent = '';
+
+  try {
+    const r = await fetch('/api/test/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        apk_lists: apkLists,
+        rule_folders: ruleFolders,
+        output_name: document.getElementById('test-output-name').value.trim(),
+        use_cache: document.getElementById('test-use-cache').checked,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) { resultEl.textContent = '❌ ' + (d.detail || '失敗'); resultEl.style.color = 'var(--danger)'; btn.disabled = false; btn.textContent = '▶ 執行分析'; return; }
+    _testJobId = d.job_id;
+    resultEl.textContent = '✅ 已啟動 Job: ' + d.job_id;
+    resultEl.style.color = 'var(--success)';
+    document.getElementById('test-log-card').style.display = '';
+    document.getElementById('test-result-card').style.display = 'none';
+    document.getElementById('test-log-box').innerHTML = '<span class="log-empty">等待輸出…</span>';
+    document.getElementById('test-log-status').innerHTML = '<span class="spinner"></span>';
+    if (_testPollTimer) clearInterval(_testPollTimer);
+    _testPollTimer = setInterval(() => pollTestJob(_testJobId), 1500);
+  } catch(e) {
+    resultEl.textContent = '❌ ' + e.message;
+    resultEl.style.color = 'var(--danger)';
+    btn.disabled = false;
+    btn.textContent = '▶ 執行分析';
+  }
+}
+
+async function pollTestJob(jobId) {
+  try {
+    const r = await fetch('/api/pipeline/jobs/' + jobId);
+    if (!r.ok) return;
+    const d = await r.json();
+    const logBox = document.getElementById('test-log-box');
+    const logs = d.logs || [];
+    logBox.textContent = logs.length ? logs.join('\n') : '（無輸出）';
+    const atBottom = logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 60;
+    if (atBottom) logBox.scrollTop = logBox.scrollHeight;
+
+    const statusEl = document.getElementById('test-log-status');
+    if (d.status === 'running') {
+      statusEl.innerHTML = '<span class="spinner"></span>';
+    } else {
+      clearInterval(_testPollTimer);
+      _testPollTimer = null;
+      const btn = document.getElementById('test-run-btn');
+      btn.disabled = false;
+      btn.textContent = '▶ 執行分析';
+      if (d.status === 'done') {
+        statusEl.innerHTML = '<span class="badge badge-green">完成</span>';
+        loadTestJobResult(jobId);
+        loadTestHistory();
+      } else {
+        statusEl.innerHTML = '<span class="badge badge-red">失敗 (exit ' + d.returncode + ')</span>';
+      }
+    }
+  } catch(e) {}
+}
+
+async function loadTestJobResult(jobId) {
+  try {
+    const r = await fetch('/api/test/result/' + jobId);
+    const d = await r.json();
+    renderTestResults(d);
+  } catch(e) {}
+}
+
+function renderTestResults(d) {
+  const card = document.getElementById('test-result-card');
+  const thead = document.getElementById('test-result-thead');
+  const tbody = document.getElementById('test-result-tbody');
+  const msgEl = document.getElementById('test-result-msg');
+  card.style.display = '';
+  _testResultData = d.rows || [];
+
+  if (d.message) { msgEl.textContent = d.message; }
+  if (!_testResultData.length) {
+    thead.innerHTML = '';
+    tbody.innerHTML = '<tr><td colspan="99" style="text-align:center;color:var(--text2);">無結果</td></tr>';
+    document.getElementById('test-result-count').textContent = '0 筆';
+    return;
+  }
+  const cols = d.columns || Object.keys(_testResultData[0] || {});
+  document.getElementById('test-result-count').textContent = d.total + ' 筆';
+  thead.innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>';
+  filterTestResults(cols);
+}
+
+function filterTestResults(cols) {
+  const tbody = document.getElementById('test-result-tbody');
+  const q = document.getElementById('test-result-filter').value.toLowerCase();
+  const allCols = cols || (document.querySelectorAll('#test-result-thead th').length
+    ? Array.from(document.querySelectorAll('#test-result-thead th')).map(th => th.textContent)
+    : []);
+  const rows = q
+    ? _testResultData.filter(r => Object.values(r).some(v => String(v).toLowerCase().includes(q)))
+    : _testResultData;
+  tbody.innerHTML = rows.slice(0, 500).map(row =>
+    '<tr>' + allCols.map(c => {
+      const v = row[c] ?? '';
+      const isSha = c === 'sha256' || (typeof v === 'string' && v.length === 64 && /^[0-9a-f]+$/.test(v));
+      return `<td class="${isSha ? 'sha-cell' : ''}">${isSha ? v.substring(0, 16) + '…' : v}</td>`;
+    }).join('') + '</tr>'
+  ).join('');
+  if (rows.length > 500) {
+    document.getElementById('test-result-msg').textContent = `顯示前 500 筆（共 ${rows.length} 筆）`;
+  }
+}
+
+async function loadTestHistory() {
+  try {
+    const r = await fetch('/api/test/history');
+    const d = await r.json();
+    const card = document.getElementById('test-history-card');
+    const el = document.getElementById('test-history-list');
+    if (!d.results || !d.results.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+    el.innerHTML = d.results.map(item =>
+      `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:6px;background:var(--surface2);margin-bottom:6px;">
+        <span style="font-family:var(--mono);font-size:12px;">${item.name}</span>
+        <span style="font-size:11px;color:var(--text2);">${item.csv_count} CSV shard(s)</span>
+        <button class="btn btn-secondary" style="padding:3px 10px;font-size:11px;" onclick="loadHistoryResult('${item.name}')">📊 載入結果</button>
+      </div>`
+    ).join('');
+  } catch(e) {}
+}
+
+async function loadHistoryResult(name) {
+  // Find a matching job_id in pipeline_processes, or call directly via a temp query
+  // We create a virtual job lookup via output_dir
+  try {
+    const r = await fetch('/api/test/history-result?name=' + encodeURIComponent(name));
+    if (r.ok) {
+      const d = await r.json();
+      renderTestResults(d);
+      document.getElementById('test-result-card').scrollIntoView({behavior: 'smooth'});
+    }
+  } catch(e) {}
+}
+
+function testScrollLog() {
+  const lb = document.getElementById('test-log-box');
+  lb.scrollTop = lb.scrollHeight;
 }
 
 // Auto-refresh Auto Pipeline page every 5 seconds
