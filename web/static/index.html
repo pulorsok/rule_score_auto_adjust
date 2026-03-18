@@ -1164,6 +1164,7 @@ const AP_STATUS_META = {
 };
 
 let _apExpandedLogs = {};
+let _apDataCache = {};   // family → JSON string, skip re-render if unchanged
 
 let _apPythonChecked = false;
 async function apCheckPython() {
@@ -1279,24 +1280,43 @@ function apRender(data) {
   const ORDER = ['analyzing','queued','completed','pr_sent','ready','downloading','searching','pr_merged','search_failed','insufficient'];
   families.sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status));
 
-  // Save scroll positions of expanded log boxes before re-render
-  const savedScroll = {};
-  for (const family of Object.keys(_apExpandedLogs)) {
-    if (!_apExpandedLogs[family]) continue;
+  // Smart diff: only re-render cards whose data actually changed
+  const newOrder = families.map(f => f.family);
+  const curOrder = [...grid.querySelectorAll('.ap-card[data-family]')].map(el => el.dataset.family);
+  const orderChanged = JSON.stringify(curOrder) !== JSON.stringify(newOrder);
+
+  const _saveScroll = (family) => {
+    if (!_apExpandedLogs[family]) return null;
     const box = document.querySelector(`#ap-log-${family} .ap-log-box`);
-    if (box) {
-      const atBottom = box.scrollHeight - box.scrollTop <= box.clientHeight + 4;
-      savedScroll[family] = atBottom ? 'bottom' : box.scrollTop;
+    if (!box) return null;
+    return (box.scrollHeight - box.scrollTop <= box.clientHeight + 4) ? 'bottom' : box.scrollTop;
+  };
+  const _restoreScroll = (family, pos) => {
+    if (pos === null) return;
+    const box = document.querySelector(`#ap-log-${family} .ap-log-box`);
+    if (box) box.scrollTop = (pos === 'bottom') ? box.scrollHeight : pos;
+  };
+
+  if (orderChanged) {
+    // Order changed (new family added, status reordered) — full rebuild
+    const savedScroll = {};
+    for (const f of families) savedScroll[f.family] = _saveScroll(f.family);
+    grid.innerHTML = families.map(f => { _apDataCache[f.family] = JSON.stringify(f); return apFamilyCard(f); }).join('');
+    for (const f of families) _restoreScroll(f.family, savedScroll[f.family]);
+    // Remove cache entries for families no longer present
+    const alive = new Set(newOrder);
+    Object.keys(_apDataCache).forEach(k => { if (!alive.has(k)) delete _apDataCache[k]; });
+  } else {
+    // Same order — patch only changed cards in-place
+    for (const f of families) {
+      const key = JSON.stringify(f);
+      if (_apDataCache[f.family] === key) continue;  // no change, skip
+      _apDataCache[f.family] = key;
+      const scrollPos = _saveScroll(f.family);
+      const el = grid.querySelector(`.ap-card[data-family="${CSS.escape(f.family)}"]`);
+      if (el) el.outerHTML = apFamilyCard(f);
+      _restoreScroll(f.family, scrollPos);
     }
-  }
-
-  grid.innerHTML = families.map(f => apFamilyCard(f)).join('');
-
-  // Restore scroll positions after re-render
-  for (const [family, pos] of Object.entries(savedScroll)) {
-    const box = document.querySelector(`#ap-log-${family} .ap-log-box`);
-    if (!box) continue;
-    box.scrollTop = pos === 'bottom' ? box.scrollHeight : pos;
   }
 }
 
@@ -1448,7 +1468,7 @@ function apFamilyCard(f) {
       </div>
     </div>`;
 
-  return `<div class="ap-card">
+  return `<div class="ap-card" data-family="${f.family}">
     <div class="ap-card-header">
       <span class="ap-family-name">${f.family}</span>
       <span class="badge ${meta.cls}">${meta.spin ? '<span class="spinner" style="width:10px;height:10px;border-width:1.5px;margin-right:4px;"></span>' : ''}${meta.label}</span>

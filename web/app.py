@@ -828,6 +828,10 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
         apk_folder = str(PROJECT_ROOT / "data" / "apks" / safe_family)
     analysis_env["APK_FOLDER"] = apk_folder
 
+    # RULE_FOLDER: override to family-specific dir so rule_lib.get() finds the right files
+    # (dataset.py resolves rule paths via RULE_FOLDER env var, not via --rule-folder CLI arg)
+    analysis_env["RULE_FOLDER"] = str(rules_dir)
+
     # GENERATE_RULES_CPUS: auto-detect if not set by user
     if not analysis_env.get("GENERATE_RULES_CPUS", "").strip():
         import multiprocessing
