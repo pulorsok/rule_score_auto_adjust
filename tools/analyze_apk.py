@@ -13,15 +13,22 @@ import functools
 
 
 def get_apk_path(row: Dict[str, Any]) -> Dict[str, Any]:
-    # Get the APK path from the sha256, do not download it
-    path = apk_lib.download(row["sha256"], use_cache=True, dry_run=True)
-    row["apk_path"] = str(path) if path else None
+    try:
+        path = apk_lib.download(row["sha256"], use_cache=True, dry_run=True)
+        row["apk_path"] = str(path) if path else None
+    except Exception as e:
+        print(f"[get_apk_path] {row['sha256']}: {e}")
+        row["apk_path"] = None
     return row
 
 
 def analyze_apk(row: Dict[str, Any], rules: list[Path], use_cache: bool = True) -> list[Dict[str, Any]]:
-    results = analysis_result_lib.analyze_rules(row["sha256"], Path(row["apk_path"]), rules, use_cache=use_cache)
-    print(row["apk_path"])
+    try:
+        results = analysis_result_lib.analyze_rules(row["sha256"], Path(row["apk_path"]), rules, use_cache=use_cache)
+        print(row["apk_path"])
+    except Exception as e:
+        print(f"[analyze_apk] {row['sha256']}: {e}")
+        return []
 
     def get_new_row(row, rule_name: str, confidence: int) -> Dict[str, Any]:
         new_row = row.copy()
@@ -36,7 +43,12 @@ def analyze_apks(sha256s: list[str], rules: list[Path], output_csv: Path, use_ca
     ray.init(num_cpus=4)
 
     sha256s_pl = pd.DataFrame({"sha256": sha256s})
-    sha256s_pl = sha256s_pl.assign(size=sha256s_pl["sha256"].apply(lambda x: apk_lib._get_path(x).stat().st_size))
+    def _safe_size(sha256: str) -> int:
+        try:
+            return apk_lib._get_path(sha256).stat().st_size
+        except FileNotFoundError:
+            return 0
+    sha256s_pl = sha256s_pl.assign(size=sha256s_pl["sha256"].apply(_safe_size))
     sha256s_pl = sha256s_pl.sort_values("size")
 
     # Drop size column as it is not needed anymore
@@ -100,8 +112,13 @@ def analyze_apk_parallelly(apk_list: list[Path], rule_folder: list[Path], output
     Example usage:
     uv run tools/analyze_apk.py -a data/lists/family/droidkungfu_test.csv -a data/lists/benignAPKs_top_0.4_vt_scan_date.csv -r data/test_rules
     """
-    mem_bytes = 22 * 1024 * 1024 * 1024  # 20 GB
-    resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+    mem_bytes = 22 * 1024 * 1024 * 1024  # 22 GB
+    try:
+        _, hard = resource.getrlimit(resource.RLIMIT_AS)
+        limit = mem_bytes if hard == resource.RLIM_INFINITY else min(mem_bytes, hard)
+        resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
+    except (ValueError, OSError):
+        pass  # Skip on platforms where the limit cannot be set (e.g. macOS)
 
     # Flatten the list of APKs and rules
     sha256s = (

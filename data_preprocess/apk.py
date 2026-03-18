@@ -38,9 +38,11 @@ def write_csv(apk_list: pl.DataFrame, output_path: str) -> Path:
     return Path(output_path).resolve()
 
 
+_PROJECT_ROOT = Path(__file__).parent.parent
+
 def _get_path(sha256: str) -> Path:
-    apk_path = Path(os.getenv("APK_FOLDER", "NOT_DEFINED")) / f"{sha256}.apk"
-    return apk_path.resolve()
+    folder = os.getenv("APK_FOLDER") or str(_PROJECT_ROOT / "data" / "apks")
+    return (Path(folder) / f"{sha256}.apk").resolve()
 
 
 def __download(

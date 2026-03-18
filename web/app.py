@@ -283,9 +283,7 @@ def start_training(req: TrainRequest):
         cmd += ["--run-id", req.run_id]
 
     pipeline_processes[job_id] = {"status": "pending", "logs": [], "cmd": "", "type": "train"}
-    thread = asyncio.get_event_loop().run_in_executor(
-        None, _run_script, job_id, cmd, project_root
-    )
+    threading.Thread(target=_run_script, args=(job_id, cmd, project_root), daemon=True).start()
 
     return {"job_id": job_id, "status": "started", "cmd": " ".join(cmd)}
 
@@ -306,7 +304,7 @@ def start_generate_rules(req: GenerateRulesRequest):
     pipeline_processes[job_id] = {
         "status": "pending", "logs": [], "cmd": "", "type": "generate_rules"
     }
-    asyncio.get_event_loop().run_in_executor(None, _run_script, job_id, cmd, project_root)
+    threading.Thread(target=_run_script, args=(job_id, cmd, project_root), daemon=True).start()
 
     return {"job_id": job_id, "status": "started", "cmd": " ".join(cmd)}
 
@@ -331,7 +329,7 @@ def start_collect_apk_by_family(
     pipeline_processes[job_id] = {
         "status": "pending", "logs": [], "cmd": "", "type": "collect_apk"
     }
-    asyncio.get_event_loop().run_in_executor(None, _run_script, job_id, cmd, project_root)
+    threading.Thread(target=_run_script, args=(job_id, cmd, project_root), daemon=True).start()
 
     return {"job_id": job_id, "status": "started", "cmd": " ".join(cmd)}
 
@@ -354,7 +352,7 @@ def start_apply_rule_info(req: ApplyRuleInfoRequest):
     pipeline_processes[job_id] = {
         "status": "pending", "logs": [], "cmd": "", "type": "apply_rule_info"
     }
-    asyncio.get_event_loop().run_in_executor(None, _run_script, job_id, cmd, project_root)
+    threading.Thread(target=_run_script, args=(job_id, cmd, project_root), daemon=True).start()
 
     return {"job_id": job_id, "status": "started", "cmd": " ".join(cmd)}
 
@@ -1611,7 +1609,7 @@ def run_test_analysis(req: TestRunRequest):
         "status": "pending", "logs": [], "type": "test_analysis",
         "output_dir": str(output_dir),
     }
-    asyncio.get_event_loop().run_in_executor(None, _run_script, job_id, cmd, str(PROJECT_ROOT), analysis_env)
+    threading.Thread(target=_run_script, args=(job_id, cmd, str(PROJECT_ROOT), analysis_env), daemon=True).start()
     return {"job_id": job_id, "output_dir": str(output_dir)}
 
 
