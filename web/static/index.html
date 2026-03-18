@@ -797,6 +797,30 @@ async function startApplyRuleInfo() {
 
 // ── Jobs ──
 let expandedJobs = {};
+let _jobsCache = {}; // jobId → {status, log_lines, started_at, finished_at}
+
+function _jobCardHtml(jobId, info) {
+  const badgeClass = { running: 'badge-blue', done: 'badge-green', failed: 'badge-red', pending: 'badge-yellow', error: 'badge-red' }[info.status] || 'badge-gray';
+  const statusLabel = { running: '執行中', done: '完成', failed: '失敗', pending: '等待', error: '錯誤' }[info.status] || info.status;
+  return `
+    <div class="job-card" data-jobid="${jobId}">
+      <div class="job-header">
+        <div class="flex-row">
+          <span class="badge ${badgeClass}" data-role="status">${statusLabel}</span>
+          <span class="job-id">${jobId}</span>
+          <span class="badge badge-gray">${info.type || '—'}</span>
+        </div>
+        <div class="flex-row">
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="toggleLog('${jobId}')">📄 Log (<span data-role="log-lines">${info.log_lines}</span>)</button>
+          <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteJob('${jobId}')">🗑</button>
+        </div>
+      </div>
+      <div class="text-sm" data-role="times">${info.started_at ? '開始：' + info.started_at : ''} ${info.finished_at ? '  結束：' + info.finished_at : ''}</div>
+      <div id="log-${jobId}" style="display:${expandedJobs[jobId] ? 'block' : 'none'};margin-top:10px;">
+        <div class="log-box" id="logbox-${jobId}"><span class="log-empty">載入中…</span></div>
+      </div>
+    </div>`;
+}
 
 async function loadJobs() {
   const container = document.getElementById('jobs-list');
@@ -809,35 +833,55 @@ async function loadJobs() {
 
     if (!jobs.length) {
       container.innerHTML = '<div class="empty-state">尚無任務紀錄</div>';
+      _jobsCache = {};
       return;
     }
 
-    container.innerHTML = jobs.map(([jobId, info]) => {
-      const badgeClass = { running: 'badge-blue', done: 'badge-green', failed: 'badge-red', pending: 'badge-yellow', error: 'badge-red' }[info.status] || 'badge-gray';
-      const statusLabel = { running: '執行中', done: '完成', failed: '失敗', pending: '等待', error: '錯誤' }[info.status] || info.status;
-      return `
-        <div class="job-card">
-          <div class="job-header">
-            <div class="flex-row">
-              <span class="badge ${badgeClass}">${statusLabel}</span>
-              <span class="job-id">${jobId}</span>
-              <span class="badge badge-gray">${info.type || '—'}</span>
-            </div>
-            <div class="flex-row">
-              <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;" onclick="toggleLog('${jobId}')">📄 Log (${info.log_lines})</button>
-              <button class="btn btn-danger" style="padding:4px 10px;font-size:12px;" onclick="deleteJob('${jobId}')">🗑</button>
-            </div>
-          </div>
-          <div class="text-sm">${info.started_at ? '開始：' + info.started_at : ''} ${info.finished_at ? '  結束：' + info.finished_at : ''}</div>
-          <div id="log-${jobId}" style="display:${expandedJobs[jobId] ? 'block' : 'none'};margin-top:10px;">
-            <div class="log-box" id="logbox-${jobId}"><span class="log-empty">載入中…</span></div>
-          </div>
-        </div>`;
-    }).join('');
+    const newIds = new Set(jobs.map(([id]) => id));
 
-    // Auto-reload expanded logs
-    for (const jobId of Object.keys(expandedJobs)) {
-      if (expandedJobs[jobId]) await fetchLog(jobId);
+    // Remove cards for deleted jobs
+    container.querySelectorAll('.job-card[data-jobid]').forEach(el => {
+      if (!newIds.has(el.dataset.jobid)) {
+        el.remove();
+        delete _jobsCache[el.dataset.jobid];
+      }
+    });
+
+    for (const [jobId, info] of jobs) {
+      const existing = container.querySelector(`.job-card[data-jobid="${jobId}"]`);
+      const cached = _jobsCache[jobId];
+      const unchanged = cached &&
+        cached.status === info.status &&
+        cached.log_lines === info.log_lines &&
+        cached.started_at === info.started_at &&
+        cached.finished_at === info.finished_at;
+
+      if (!existing) {
+        // New card — insert at correct position
+        container.insertAdjacentHTML('beforeend', _jobCardHtml(jobId, info));
+        _jobsCache[jobId] = { status: info.status, log_lines: info.log_lines, started_at: info.started_at, finished_at: info.finished_at };
+      } else if (!unchanged) {
+        // Update only the dynamic parts, leave log box untouched
+        const badgeClass = { running: 'badge-blue', done: 'badge-green', failed: 'badge-red', pending: 'badge-yellow', error: 'badge-red' }[info.status] || 'badge-gray';
+        const statusLabel = { running: '執行中', done: '完成', failed: '失敗', pending: '等待', error: '錯誤' }[info.status] || info.status;
+        const statusEl = existing.querySelector('[data-role="status"]');
+        if (statusEl) { statusEl.className = `badge ${badgeClass}`; statusEl.textContent = statusLabel; }
+        const linesEl = existing.querySelector('[data-role="log-lines"]');
+        if (linesEl) linesEl.textContent = info.log_lines;
+        const timesEl = existing.querySelector('[data-role="times"]');
+        if (timesEl) timesEl.textContent = (info.started_at ? '開始：' + info.started_at : '') + (info.finished_at ? '  結束：' + info.finished_at : '');
+        _jobsCache[jobId] = { status: info.status, log_lines: info.log_lines, started_at: info.started_at, finished_at: info.finished_at };
+      }
+    }
+
+    // Refresh logs for expanded jobs (only if log count changed)
+    for (const [jobId, info] of jobs) {
+      if (!expandedJobs[jobId]) continue;
+      const cached = _jobsCache[jobId];
+      if (!cached || cached._fetchedLines !== info.log_lines) {
+        await fetchLog(jobId);
+        if (_jobsCache[jobId]) _jobsCache[jobId]._fetchedLines = info.log_lines;
+      }
     }
   } catch(e) {
     container.innerHTML = `<div class="empty-state" style="color:var(--danger)">無法載入：${e.message}</div>`;
@@ -848,18 +892,22 @@ async function toggleLog(jobId) {
   expandedJobs[jobId] = !expandedJobs[jobId];
   const el = document.getElementById('log-' + jobId);
   el.style.display = expandedJobs[jobId] ? 'block' : 'none';
-  if (expandedJobs[jobId]) await fetchLog(jobId);
+  if (expandedJobs[jobId]) await fetchLog(jobId, true);
 }
 
-async function fetchLog(jobId) {
+async function fetchLog(jobId, forceScrollBottom = false) {
   const box = document.getElementById('logbox-' + jobId);
   if (!box) return;
   try {
     const res = await fetch(`/api/pipeline/jobs/${jobId}`);
     const data = await res.json();
     const logs = data.logs || [];
-    box.textContent = logs.length ? logs.join('\n') : '（尚無 log）';
-    box.scrollTop = box.scrollHeight;
+    const newText = logs.length ? logs.join('\n') : '（尚無 log）';
+    if (box.textContent === newText) return; // 內容沒變，不動 DOM
+    // 記錄是否已在底部，或是強制捲到底（第一次開啟時）
+    const atBottom = forceScrollBottom || (box.scrollHeight - box.scrollTop <= box.clientHeight + 20);
+    box.textContent = newText;
+    if (atBottom) box.scrollTop = box.scrollHeight;
   } catch {}
 }
 
