@@ -15,6 +15,7 @@ python tools/adjust_rule_score.py --run-id <mlflow_run_id> --lrs 0.01 --epochs 5
 
 import copy
 import datetime
+import os
 import sys
 from dataclasses import dataclass
 from itertools import count
@@ -285,7 +286,13 @@ def setup_mlflow(
     path_to_apk_list: List[Path],
 ) -> Tuple[Run, int]:
     """Sets up MLflow for a new or resumed run."""
-    mlflow.set_tracking_uri(uri="http://localhost:5000")
+    # Use local file-based tracking if no server is running
+    mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "")
+    if not mlflow_uri:
+        mlflow_dir = Path(os.getenv("MLFLOW_LOCAL_DIR", "mlruns"))
+        mlflow_dir.mkdir(parents=True, exist_ok=True)
+        mlflow_uri = mlflow_dir.resolve().as_uri()   # file:///...
+    mlflow.set_tracking_uri(uri=mlflow_uri)
     step = 0
     if run_id:
         run = mlflow.start_run(run_id=run_id)
