@@ -9,7 +9,8 @@ import dotenv
 
 dotenv.load_dotenv()
 
-cache = FanoutCache(f"{os.getenv("CACHE_FOLDER")}/apk_download_cache")
+_CACHE_FOLDER = os.getenv("CACHE_FOLDER") or str(Path(__file__).parent.parent / "data" / "cache")
+cache = FanoutCache(f"{_CACHE_FOLDER}/apk_download_cache")
 
 
 class APK_DOWNLOAD_STATUS(enum.Enum):

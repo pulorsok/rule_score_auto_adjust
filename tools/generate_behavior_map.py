@@ -186,6 +186,11 @@ def entry_point(apk_list: Path, rule_folder: Path) -> None:
 
 
 if __name__ == "__main__":
-    mem_bytes = 22 * 1024 * 1024 * 1024  # 20 GB
-    resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+    mem_bytes = 22 * 1024 * 1024 * 1024  # 22 GB
+    try:
+        _, hard = resource.getrlimit(resource.RLIMIT_AS)
+        limit = mem_bytes if hard == resource.RLIM_INFINITY else min(mem_bytes, hard)
+        resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
+    except (ValueError, OSError):
+        pass
     entry_point()

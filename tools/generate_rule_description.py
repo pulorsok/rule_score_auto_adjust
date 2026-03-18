@@ -9,7 +9,8 @@ import dotenv
 
 dotenv.load_dotenv()
 
-cache = diskcache.FanoutCache(f"{os.getenv("CACHE_FOLDER")}/crime_description_cache")
+_CACHE_FOLDER = os.getenv("CACHE_FOLDER") or str(Path(__file__).parent.parent / "data" / "cache")
+cache = diskcache.FanoutCache(f"{_CACHE_FOLDER}/crime_description_cache")
 
 
 class RuleDescriptionAgent:

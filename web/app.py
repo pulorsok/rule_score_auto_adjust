@@ -917,8 +917,9 @@ def _run_post_train_steps(
     python_cmd: list,
     analysis_env: dict,
     complete_msg: str,
+    csv_path: str = "",
 ) -> None:
-    """Run apply_rule_info and copy_rule_to_quark_rules after weight adjustment, then set COMPLETED."""
+    """Run apply_rule_info, description generation, behavior map, coverage check, and copy_rule_to_quark_rules."""
     safe_family = _safe_name(family)
 
     # Step 3: Apply optimized scores back to rule JSON files
@@ -943,6 +944,83 @@ def _run_post_train_steps(
         _append_log(family, f"⚠ Apply rule scores failed (exit {rc}) — scores not written to rule files.")
     else:
         _append_log(family, "✅ Rule scores applied to JSON files.")
+
+    # Step 3.5: Generate rule descriptions using AI (requires OPENAI_API_KEY)
+    openai_key = analysis_env.get("OPENAI_API_KEY", "").strip()
+    if openai_key:
+        _append_log(family, "=== Step 3.5: Generating rule descriptions (AI) ===")
+        desc_job = f"autodesc_{family}_{datetime.now().strftime('%H%M%S')}"
+        pipeline_processes[desc_job] = {"status": "pending", "logs": [], "type": "auto_description"}
+        desc_cmd = python_cmd + [
+            str(PROJECT_ROOT / "tools" / "generate_rule_description.py"),
+            "-r", str(rules_dir),
+            "--write",
+        ]
+        _run_script(desc_job, desc_cmd, str(PROJECT_ROOT), env=analysis_env, log_family=family)
+        if pipeline_processes[desc_job].get("returncode", 1) != 0:
+            _append_log(family, "⚠ Rule description generation failed — continuing without AI descriptions.")
+        else:
+            _append_log(family, "✅ AI-generated descriptions written to rule files.")
+    else:
+        _append_log(family, "ℹ OPENAI_API_KEY not configured — skipping AI rule description generation.")
+
+    # Step 3.6: Generate Behavior Map (requires quark CLI)
+    if csv_path:
+        _append_log(family, "=== Step 3.6: Generating Behavior Map ===")
+        bmap_job = f"autobmap_{family}_{datetime.now().strftime('%H%M%S')}"
+        pipeline_processes[bmap_job] = {"status": "pending", "logs": [], "type": "auto_behavior_map"}
+        bmap_cmd = python_cmd + [
+            str(PROJECT_ROOT / "tools" / "generate_behavior_map.py"),
+            "-a", csv_path,
+            "-r", str(rules_dir),
+        ]
+        _run_script(bmap_job, bmap_cmd, str(PROJECT_ROOT), env=analysis_env, log_family=family)
+        if pipeline_processes[bmap_job].get("returncode", 1) != 0:
+            _append_log(family, "⚠ Behavior Map generation failed — continuing.")
+        else:
+            _append_log(family, "✅ Behavior Map generated.")
+    else:
+        _append_log(family, "ℹ No APK list available — skipping Behavior Map generation.")
+
+    # Step 3.7: Check detection coverage (analyze generated rules against family APKs)
+    if csv_path:
+        _append_log(family, "=== Step 3.7: Checking detection coverage ===")
+        coverage_dir = PROJECT_ROOT / "data" / "coverage_check" / safe_family
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+        cov_job = f"autocov_{family}_{datetime.now().strftime('%H%M%S')}"
+        pipeline_processes[cov_job] = {"status": "pending", "logs": [], "type": "auto_coverage"}
+        cov_cmd = python_cmd + [
+            str(PROJECT_ROOT / "tools" / "analyze_apk.py"),
+            "-a", csv_path,
+            "-r", str(rules_dir),
+            "-o", str(coverage_dir),
+        ]
+        _run_script(cov_job, cov_cmd, str(PROJECT_ROOT), env=analysis_env, log_family=family)
+        if pipeline_processes[cov_job].get("returncode", 1) != 0:
+            _append_log(family, "⚠ Coverage check failed — continuing.")
+        else:
+            # Summarize coverage results
+            try:
+                import csv as _csv
+                detected = set()
+                total_rules = set()
+                for csv_file in sorted(coverage_dir.rglob("*.csv")):
+                    with open(csv_file, newline="", encoding="utf-8") as f:
+                        for row in _csv.DictReader(f):
+                            rule = row.get("rule_name", "")
+                            conf = int(row.get("confidence", 0))
+                            if rule:
+                                total_rules.add(rule)
+                            if conf >= 4:
+                                detected.add(rule)
+                if total_rules:
+                    _append_log(family, f"✅ Coverage: {len(detected)}/{len(total_rules)} rules detected (confidence ≥ 4).")
+                else:
+                    _append_log(family, "ℹ No coverage data to summarize.")
+            except Exception as e:
+                _append_log(family, f"ℹ Coverage summary skipped ({e}).")
+    else:
+        _append_log(family, "ℹ No APK list available — skipping coverage check.")
 
     # Step 4: Copy rules to quark-rules folder (if QUARK_RULES_FOLDER is configured)
     quark_rules_folder_str = analysis_env.get("QUARK_RULES_FOLDER", "").strip()
@@ -1085,7 +1163,8 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
             _set_family(family, status=FS.READY, error=f"Weight adjustment failed (exit {rc})")
             return
         _run_post_train_steps(family, pred_csv, rules_dir, rules_count, python_cmd, analysis_env,
-                              f"✅ Re-training complete! {rules_count} rules ready.")
+                              f"✅ Re-training complete! {rules_count} rules ready.",
+                              csv_path=csv_path)
         return
 
     # Step 1: Generate rules — use only N samples (default 1) to keep it fast
@@ -1131,6 +1210,45 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
         _set_family(family, status=FS.READY, error="No rules generated (try increasing GENERATE_RULES_MAX_APIS or remove the limit)")
         return
 
+    # Step 1.5: Remove rules duplicated with built-in Quark rules
+    quark_dedup_folder = analysis_env.get("QUARK_RULES_FOLDER", "").strip()
+    if quark_dedup_folder:
+        builtin_rules_path = Path(quark_dedup_folder) / "rules"
+        if builtin_rules_path.exists():
+            _append_log(family, "=== Step 1.5: Removing rules duplicated with Quark built-in ===")
+            try:
+                import json as _json, hashlib as _hl
+                builtin_hashes = set()
+                for bf in builtin_rules_path.glob("*.json"):
+                    try:
+                        with bf.open() as f:
+                            api = _json.load(f)["api"]
+                        builtin_hashes.add(_hl.sha256(_json.dumps(api).encode()).hexdigest())
+                    except Exception:
+                        pass
+                removed = 0
+                for gf in list(rules_dir.glob("*.json")):
+                    try:
+                        with gf.open() as f:
+                            api = _json.load(f)["api"]
+                        if _hl.sha256(_json.dumps(api).encode()).hexdigest() in builtin_hashes:
+                            gf.unlink()
+                            removed += 1
+                    except Exception:
+                        pass
+                rules_count = len(list(rules_dir.glob("*.json")))
+                _append_log(family, f"  Removed {removed} duplicate(s). {rules_count} rules remaining.")
+                if rules_count == 0:
+                    _append_log(family, "❌ All rules are duplicates of built-in rules — nothing to train.")
+                    _set_family(family, status=FS.READY, error="All generated rules are duplicates of built-in rules")
+                    return
+            except Exception as e:
+                _append_log(family, f"⚠ Dedup check failed ({e}) — continuing with all rules.")
+        else:
+            _append_log(family, f"ℹ QUARK_RULES_FOLDER/rules not found — skipping dedup.")
+    else:
+        _append_log(family, "ℹ QUARK_RULES_FOLDER not configured — skipping dedup.")
+
     # Step 2: Adjust weights
     _append_log(family, "=== Step 2: Adjusting rule weights ===")
     train_csv = _make_train_csv(family, csv_path, safe_family, analysis_env)
@@ -1163,7 +1281,8 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
         _set_family(family, status=FS.READY, error=f"Weight adjustment failed (exit {rc})")
         return
     _run_post_train_steps(family, pred_csv, rules_dir, rules_count, python_cmd, analysis_env,
-                          f"✅ Analysis complete! {rules_count} rules, weights applied.")
+                          f"✅ Analysis complete! {rules_count} rules, weights applied.",
+                          csv_path=csv_path)
 
 
 def _analysis_wrapper(family: str):

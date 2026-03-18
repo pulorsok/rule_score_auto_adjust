@@ -14,7 +14,9 @@ SCHEMA = {
     "passing_stage": pl.Int8(),
 }
 
-cache = FanoutCache(f"{os.getenv("CACHE_FOLDER")}/analysis_result_status")
+_PROJECT_ROOT = Path(__file__).parent.parent
+_CACHE_FOLDER = os.getenv("CACHE_FOLDER") or str(_PROJECT_ROOT / "data" / "cache")
+cache = FanoutCache(f"{_CACHE_FOLDER}/analysis_result_status")
 
 
 class ANALYSIS_STATUS(enum.Enum):
@@ -24,7 +26,7 @@ class ANALYSIS_STATUS(enum.Enum):
 
 
 def get_folder() -> Path:
-    return Path(os.getenv("ANALYSIS_RESULT_FOLDER", "NOT_DEFINED"))
+    return Path(os.getenv("ANALYSIS_RESULT_FOLDER") or str(_PROJECT_ROOT / "data" / "analysis_results"))
 
 
 @deprecated("Use analyze instead")

@@ -100,7 +100,7 @@ class ApkDataset(torch.utils.data.Dataset, Iterable):
     @functools.cached_property
     def base_folder(self) -> Path:
         return self.__createIfNotExists(
-            Path(os.getenv("DATASET_CACHE_FOLDER", "NOT_DEFINED"))
+            Path(os.getenv("DATASET_CACHE_FOLDER") or str(Path(__file__).parent.parent / "data" / "dataset"))
             / f"{type(self).__name__}_{hash(self)}"
         )
 
