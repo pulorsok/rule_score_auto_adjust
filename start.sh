@@ -5,6 +5,11 @@
 #  Usage:
 #    ./start.sh             # default: port 9527
 #    PORT=8080 ./start.sh   # custom port
+#    DEV=true ./start.sh    # enable auto-reload (development only)
+#
+#  WARNING: Do NOT use DEV=true during long-running training jobs.
+#           uvicorn --reload will restart the server on any .py file change,
+#           causing "分析中斷" and loss of in-flight training state.
 # =============================================================================
 set -euo pipefail
 
@@ -12,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 PORT="${PORT:-9527}"
+DEV="${DEV:-false}"
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
 if ! command -v uv &>/dev/null; then
@@ -43,8 +49,16 @@ echo "  ║  http://localhost:${PORT}               ║"
 echo "  ╚═══════════════════════════════════════╝"
 echo ""
 
+RELOAD_FLAG=""
+if [[ "$DEV" == "true" ]]; then
+    RELOAD_FLAG="--reload"
+    echo "  [dev] Auto-reload enabled (DEV=true)"
+    echo "        Do NOT run long training jobs in this mode."
+    echo ""
+fi
+
 exec uv run uvicorn web.app:app \
     --host 0.0.0.0 \
     --port "$PORT" \
-    --reload \
+    $RELOAD_FLAG \
     --log-level info
