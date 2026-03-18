@@ -264,8 +264,13 @@ def prepare_data(
 
 def setup_model(num_rules: int) -> Tuple[RuleAdjustmentModel, torch.device, torch.nn.Module]:
     """Initializes model, device, and loss function."""
-    assert torch.cuda.is_available()
-    device = torch.device("cuda")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")  # Apple Silicon
+    else:
+        device = torch.device("cpu")
+    print(f"[setup_model] using device: {device}")
 
     model = RuleAdjustmentModel(num_rules)
     model = model.to(device)
