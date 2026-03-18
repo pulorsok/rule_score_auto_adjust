@@ -231,7 +231,9 @@ def _run_script(job_id: str, cmd: list[str], cwd: str, env: dict | None = None):
         lines = []
         for line in proc.stdout:
             lines.append(line.rstrip())
-            pipeline_processes[job_id]["logs"] = lines[-500:]  # keep last 500 lines
+            pipeline_processes[job_id]["logs"] = lines[-500:]
+            if len(lines) % 50 == 0:   # checkpoint every 50 lines
+                _save_completed_job(job_id)
 
         proc.wait()
         pipeline_processes[job_id]["returncode"] = proc.returncode
@@ -621,24 +623,29 @@ def _load_jobs():
 
 
 def _save_completed_job(job_id: str):
-    """Persist a completed job's metadata + last 100 log lines to disk."""
+    """Persist a job's metadata + last 500 log lines to disk (called periodically and on finish)."""
     info = pipeline_processes.get(job_id, {})
     try:
         existing: dict = {}
         if JOBS_FILE.exists():
-            existing = json.loads(JOBS_FILE.read_text())
+            try:
+                existing = json.loads(JOBS_FILE.read_text())
+            except Exception:
+                existing = {}
         existing[job_id] = {
             k: v for k, v in info.items()
             if k in ("status", "type", "cmd", "started_at", "finished_at", "returncode", "pid", "error")
         }
-        existing[job_id]["logs"] = info.get("logs", [])[-100:]
+        existing[job_id]["logs"] = info.get("logs", [])[-500:]
         # Keep only the most recent 100 jobs
         if len(existing) > 100:
             by_time = sorted(existing.keys(), key=lambda k: existing[k].get("started_at", ""))
             for old_key in by_time[:len(existing) - 100]:
                 del existing[old_key]
         JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        JOBS_FILE.write_text(json.dumps(existing, indent=2, default=str))
+        tmp = JOBS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(existing, indent=2, default=str))
+        tmp.replace(JOBS_FILE)   # atomic rename
     except Exception as e:
         print(f"[jobs] Failed to save job {job_id}: {e}")
 
@@ -663,7 +670,9 @@ def _load_family_states():
 
 def _save_family_states():
     AUTO_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    AUTO_STATE_FILE.write_text(json.dumps(_family_states, indent=2, default=str))
+    tmp = AUTO_STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(_family_states, indent=2, default=str))
+    tmp.replace(AUTO_STATE_FILE)   # atomic rename — prevents corruption on crash
 
 
 def _set_family(family: str, **kwargs):
@@ -705,6 +714,8 @@ def _run_script_with_stdin(job_id: str, cmd: list, cwd: str, stdin_input: str = 
         for line in proc.stdout:
             lines.append(line.rstrip())
             pipeline_processes[job_id]["logs"] = lines[-500:]
+            if len(lines) % 50 == 0:   # checkpoint every 50 lines
+                _save_completed_job(job_id)
         proc.wait()
         pipeline_processes[job_id]["returncode"] = proc.returncode
         pipeline_processes[job_id]["status"] = "done" if proc.returncode == 0 else "failed"
@@ -1035,6 +1046,7 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
             _append_log(family, f"❌ Weight adjustment failed (exit code {rc}).")
             _set_family(family, status=FS.READY, error=f"Weight adjustment failed (exit {rc})")
             return
+        _flush_job_logs_to_family(family, train_job, prefix="  [train] ")
         _run_post_train_steps(family, pred_csv, rules_dir, rules_count, python_cmd, analysis_env,
                               f"✅ Re-training complete! {rules_count} rules ready.")
         return
@@ -1115,6 +1127,7 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
         _set_family(family, status=FS.READY, error=f"Weight adjustment failed (exit {rc})")
         return
 
+    _flush_job_logs_to_family(family, train_job, prefix="  [train] ")
     _run_post_train_steps(family, pred_csv, rules_dir, rules_count, python_cmd, analysis_env,
                           f"✅ Analysis complete! {rules_count} rules, weights applied.")
 
