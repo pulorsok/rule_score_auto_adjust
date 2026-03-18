@@ -967,7 +967,6 @@ def _run_post_train_steps(
 
 def _run_analysis(family: str, skip_rule_gen: bool = False):
     info = _family_states.get(family, {})
-    csv_path    = info.get("csv_path", "")
     safe_family = _safe_name(family)
     working_dir = PROJECT_ROOT / "data" / "generated_rules" / safe_family
     rules_dir   = PROJECT_ROOT / "data" / "rules" / safe_family
@@ -987,10 +986,24 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
                 analysis_env[k] = v
 
     # APK_FOLDER: use the family-specific folder saved during download
+    # Fall back to default path if state has a stale path from another machine
     apk_folder = info.get("apk_folder", "").strip()
-    if not apk_folder:
-        apk_folder = str(PROJECT_ROOT / "data" / "apks" / safe_family)
+    default_apk_folder = PROJECT_ROOT / "data" / "apks" / safe_family
+    if not apk_folder or not Path(apk_folder).exists():
+        if apk_folder and not Path(apk_folder).exists():
+            _append_log(family, f"⚠ APK folder not found: {apk_folder}")
+            _append_log(family, f"  Falling back to: {default_apk_folder}")
+        apk_folder = str(default_apk_folder)
     analysis_env["APK_FOLDER"] = apk_folder
+
+    # csv_path: fall back to default path if state has a stale path from another machine
+    csv_path = info.get("csv_path", "")
+    default_csv = PROJECT_ROOT / "data" / "lists" / "family" / f"{safe_family}.csv"
+    if not csv_path or not Path(csv_path).exists():
+        if csv_path and not Path(csv_path).exists():
+            _append_log(family, f"⚠ CSV not found: {csv_path}")
+            _append_log(family, f"  Falling back to: {default_csv}")
+        csv_path = str(default_csv)
 
     # RULE_FOLDER: override to family-specific dir so rule_lib.get() finds the right files
     # (dataset.py resolves rule paths via RULE_FOLDER env var, not via --rule-folder CLI arg)
@@ -1003,6 +1016,7 @@ def _run_analysis(family: str, skip_rule_gen: bool = False):
         analysis_env["GENERATE_RULES_CPUS"] = str(auto_cpus)
     _append_log(family, f"GENERATE_RULES_CPUS: {analysis_env['GENERATE_RULES_CPUS']}")
     _append_log(family, f"APK_FOLDER: {apk_folder}")
+    _append_log(family, f"CSV: {csv_path}")
 
     # Inject PYTHONPATH so local modules (data_preprocess, model, etc.) are importable
     existing_pp = analysis_env.get("PYTHONPATH", "")
